@@ -1,6 +1,6 @@
 # ISpooferMotion
 
-**ISpooferMotion** is an animation spoofing utility designed for Roblox developers and animators. It helps you quickly upload and apply animation overrides, streamlining your workflow with powerful features like automatic cookie detection and instant animation uploads.
+**ISpooferMotion** is an animation spoofing utility designed for Roblox developers and animators. It helps you quickly upload and apply animation overrides.
 
 ## Features
 
