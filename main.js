@@ -177,7 +177,7 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
   const uploadUrl = new URL("https://www.roblox.com/ide/publish/uploadnewanimation");
   uploadUrl.searchParams.set("assetTypeName", "Animation");
   uploadUrl.searchParams.set("name", name);
-  uploadUrl.searchParams.set("description", "Uploaded via ISpooferMotion"); //-- Change the description if u want:D This is just a default
+  uploadUrl.searchParams.set("description", "Placeholder"); //-- Change the description if u want:D This is just a default
   uploadUrl.searchParams.set("AllID", "1");
   uploadUrl.searchParams.set("ispublic", "False");
   uploadUrl.searchParams.set("allowComments", "True");
