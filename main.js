@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const keytar = require("keytar");
 const fsSync = require('fs');
@@ -43,6 +43,14 @@ function sendSpooferResultToRenderer(result) {
     mainWindow.webContents.send('spoofer-result', result);
   } else {
     if (DEVELOPER_MODE) console.warn("MAIN_PROCESS (Dev): Cannot send spoofer result - mainWindow or webContents not available.");
+  }
+}
+
+function sendStatusMessage(message) {
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('update-status-message', message);
+  } else {
+    if (DEVELOPER_MODE) console.warn("MAIN_PROCESS (Dev): Cannot send status message - mainWindow or webContents not available.");
   }
 }
 
@@ -223,6 +231,25 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
 ipcMain.on('window-close', () => mainWindow?.close());
 
+// Provide the app version to the renderer on request
+ipcMain.handle('get-app-version', () => {
+  try { return app.getVersion(); }
+  catch (err) { if (DEVELOPER_MODE) console.warn('Failed to get app version:', err); return '0.0.0'; }
+});
+
+// Open external links (from renderer) in the user's default browser
+ipcMain.on('open-external', (event, url) => {
+  try {
+    if (typeof url === 'string' && url.trim()) {
+      shell.openExternal(url);
+    } else if (DEVELOPER_MODE) {
+      console.warn('open-external called with invalid url:', url);
+    }
+  } catch (err) {
+    if (DEVELOPER_MODE) console.warn('Failed to open external URL:', err);
+  }
+});
+
 ipcMain.on('run-spoofer-action', async (event, data) => {
   if (DEVELOPER_MODE) console.log("MAIN_PROCESS (Dev): Received 'run-spoofer-action' with data:", data);
   else console.log("MAIN_PROCESS: Received 'run-spoofer-action'.");
@@ -278,6 +305,11 @@ ipcMain.on('run-spoofer-action', async (event, data) => {
   }
   initialTransferStates.forEach(state => sendTransferUpdate(state));
 
+  // Send initial status progress (0 / total)
+  const totalAnimations = animationEntries.length;
+  let processedCount = 0; // Number of animations processed (completed attempts)
+  try { sendStatusMessage(`0/${totalAnimations} spoofed`); } catch (e) { if (DEVELOPER_MODE) console.warn('(Dev) Failed to send initial status message', e); }
+
   let csrfToken;
   if (animationEntries.length > 0) {
     const csrfTransferId = crypto.randomUUID();
@@ -322,6 +354,12 @@ ipcMain.on('run-spoofer-action', async (event, data) => {
         const skippedUploadId = crypto.randomUUID(); sendTransferUpdate({ id: skippedUploadId, name: entry.name, originalAssetId: entry.id, status: 'skipped', direction: 'upload', message: 'CSRF token missing', error: 'CSRF token was not obtained' });
       }
     } else { verboseOutputMessage += `✗ Download Failed: ${entry.name} (ID: ${entry.id}) — ${downloadResult.error || 'Unknown download error'}\n`; }
+
+    // After each animation entry is processed (regardless of success), update the status bar
+    try {
+      processedCount++;
+      sendStatusMessage(`${processedCount}/${totalAnimations} spoofed`);
+    } catch (e) { if (DEVELOPER_MODE) console.warn('(Dev) Failed to send per-entry status message', e); }
   }
 
   if (uploadMappingOutput.trim()) {
