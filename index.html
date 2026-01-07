@@ -458,10 +458,6 @@
             if (outputDataTextarea && result && typeof result.output !== 'undefined') {
                 outputDataTextarea.value = result.output;
             }
-            if (result && typeof result.success !== 'undefined') {
-                // You could change status color based on success/failure
-                updateStatus(result.success ? "Operation successful." : "Operation failed.");
-            }
             // Re-enable the button after operation
             if(runSpooferBtn) runSpooferBtn.disabled = false;
         });
