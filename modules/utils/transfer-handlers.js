@@ -7,13 +7,25 @@ const { DEVELOPER_MODE } = require('./common');
 /**
  * Downloads an animation asset with progress reporting
  */
-async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, transferId, entryName, originalAssetId, sendTransferUpdate) {
+async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, transferId, entryName, originalAssetId, sendTransferUpdate, placeId = null) {
   sendTransferUpdate({ id: transferId, name: entryName, originalAssetId: originalAssetId, status: 'processing', direction: 'download', progress: 0, error: null, size: 0 });
+  if (DEVELOPER_MODE) {
+    console.log(`[DOWNLOAD DEBUG] Starting download for "${entryName}" (Asset ID: ${originalAssetId})`);
+    console.log(`[DOWNLOAD DEBUG] URL: ${url}`);
+    console.log(`[DOWNLOAD DEBUG] PlaceId: ${placeId || 'not provided'}`);
+    console.log(`[DOWNLOAD DEBUG] Target file: ${filePath}`);
+  }
   try {
     const response = await fetch(url, { headers: { Cookie: `.ROBLOSECURITY=${robloxCookie}` }, redirect: 'follow' });
-    if (!response.ok) throw new Error(`Failed to download asset: ${response.status} ${response.statusText}`);
-    if (!response.body) throw new Error(`No response body for asset`);
+    if (!response.ok) {
+      const errorDetail = DEVELOPER_MODE 
+        ? `Failed to download asset: ${response.status} ${response.statusText} | Asset ID: ${originalAssetId} | PlaceId: ${placeId || 'N/A'} | URL: ${url}` 
+        : `Failed to download asset: ${response.status} ${response.statusText}`;
+      throw new Error(errorDetail);
+    }
+    if (!response.body) throw new Error(`No response body for asset (ID: ${originalAssetId})`);
     const totalSize = Number(response.headers.get('content-length'));
+    if (DEVELOPER_MODE) console.log(`[DOWNLOAD DEBUG] Content-Length: ${totalSize} bytes`);
     sendTransferUpdate({ id: transferId, size: isNaN(totalSize) ? 0 : totalSize });
     const reader = response.body.getReader();
     const fileStream = fsSync.createWriteStream(filePath);
@@ -39,9 +51,13 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
     });
     if (lastReportedProgress < 100 && totalSize > 0) sendTransferUpdate({ id: transferId, progress: 100 });
     sendTransferUpdate({ id: transferId, status: 'completed', progress: 100 });
+    if (DEVELOPER_MODE) console.log(`[DOWNLOAD DEBUG] Successfully downloaded "${entryName}" (${receivedLength} bytes)`);
     return { success: true, filePath };
   } catch (error) {
-    console.error(`Download error for ${entryName}:`, error);
+    const errorMsg = DEVELOPER_MODE 
+      ? `[DOWNLOAD ERROR] "${entryName}" (Asset ID: ${originalAssetId}, PlaceId: ${placeId || 'N/A'}): ${error.message}`
+      : `Download error for ${entryName}: ${error.message}`;
+    console.error(errorMsg);
     sendTransferUpdate({ id: transferId, status: 'error', error: error.message, progress: lastReportedProgress >= 0 ? lastReportedProgress : 0 });
     return { success: false, error: error.message };
   }
@@ -75,10 +91,9 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
   uploadUrl.searchParams.set('assetTypeName', 'Animation');
   uploadUrl.searchParams.set('name', name);
   uploadUrl.searchParams.set('description', 'Placeholder');
-  uploadUrl.searchParams.set('AllID', '1');
-  uploadUrl.searchParams.set('ispublic', 'False');
-  uploadUrl.searchParams.set('allowComments', 'True');
-  uploadUrl.searchParams.set('isGamesAsset', 'False');
+  uploadUrl.searchParams.set('ispublic', 'false');
+  uploadUrl.searchParams.set('allowComments', 'true');
+  uploadUrl.searchParams.set('isGamesAsset', 'false');
   if (groupId) uploadUrl.searchParams.set('groupId', groupId);
 
   const headers = {

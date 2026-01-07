@@ -1,8 +1,13 @@
 // main.js
 const { app } = require('electron');
+const path = require('path');
 const { setupAppLifecycle, getMainWindow } = require('./modules/window');
 const { registerIpcHandlers } = require('./modules/utils/ipc-handlers');
-const { DEVELOPER_MODE } = require('./modules/utils/common');
+const { DEVELOPER_MODE, initializeFileLogging } = require('./modules/utils/common');
+
+// Initialize file logging
+const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
+initializeFileLogging(logsDir);
 
 // Setup window and app lifecycle
 setupAppLifecycle();

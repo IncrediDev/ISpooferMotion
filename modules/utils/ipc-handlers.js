@@ -164,24 +164,30 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
 
   let hasAuthError = false;
 
-  // Get placeId (optional - use 0 as fallback)
-  let placeId = 0;
+  // Get placeIds for each creator (map creatorId -> placeId)
+  const placeIdMap = {};
   if (animationEntries.length > 0) {
-    const firstEntry = animationEntries[0];
-    try {
-      if (DEVELOPER_MODE) console.log(`(Dev) Attempting to get placeId for ${firstEntry.creatorType} ${firstEntry.creatorId}...`);
-      placeId = await retryAsync(
-        () => getPlaceIdFromCreator(firstEntry.creatorType, firstEntry.creatorId, robloxCookie),
-        firstEntry.creatorType === 'group' ? 2 : 3, // Fewer retries for groups
-        1000,
-        (attempt, max, err) => {
-          if (DEVELOPER_MODE) console.warn(`(Dev) Attempt ${attempt}/${max} to get placeId failed: ${err.message}`);
-        }
-      );
-      if (DEVELOPER_MODE) console.log(`(Dev) Successfully got placeId: ${placeId}`);
-    } catch (error) {
-      if (DEVELOPER_MODE) console.warn(`(Dev) Could not get placeId (will use 0 as fallback): ${error.message}`);
-      placeId = 0;
+    const uniqueCreators = [...new Set(animationEntries.map(e => `${e.creatorType}:${e.creatorId}`))];
+    if (DEVELOPER_MODE) console.log(`(Dev) Found ${uniqueCreators.length} unique creators. Fetching placeIds...`);
+    
+    for (const creatorKey of uniqueCreators) {
+      const [creatorType, creatorId] = creatorKey.split(':');
+      try {
+        if (DEVELOPER_MODE) console.log(`(Dev) Attempting to get placeId for ${creatorType} ${creatorId}...`);
+        const placeId = await retryAsync(
+          () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie),
+          creatorType === 'group' ? 2 : 3,
+          1000,
+          (attempt, max, err) => {
+            if (DEVELOPER_MODE) console.warn(`(Dev) Attempt ${attempt}/${max} to get placeId for ${creatorKey} failed: ${err.message}`);
+          }
+        );
+        placeIdMap[creatorKey] = placeId;
+        if (DEVELOPER_MODE) console.log(`(Dev) Successfully got placeId for ${creatorKey}: ${placeId}`);
+      } catch (error) {
+        if (DEVELOPER_MODE) console.warn(`(Dev) Could not get placeId for ${creatorKey} (will use fallback): ${error.message}`);
+        placeIdMap[creatorKey] = 99840799534728; // Temporary hardcoded fallback
+      }
     }
   }
 
@@ -191,33 +197,80 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     requestId: entry.id,
     assetId: parseInt(entry.id),
     assetType: 'Animation',
+    creatorType: entry.creatorType,
+    creatorId: entry.creatorId,
   }));
   const chunkSize = 50;
 
-  if (DEVELOPER_MODE) console.log(`(Dev) Using placeId ${placeId} for batch requests`);
+  if (DEVELOPER_MODE) console.log(`(Dev) Fetching batch locations for ${batchItems.length} animations with creator-specific placeIds`);
   for (let i = 0; i < batchItems.length; i += chunkSize) {
     const chunk = batchItems.slice(i, i + chunkSize);
     try {
-      const batchResp = await fetch('https://assetdelivery.roblox.com/v2/assets/batch', {
-        method: 'POST',
-        headers: {
-          'User-Agent': 'RobloxStudio/WinInet',
-          'Content-Type': 'application/json',
-          'Cookie': `.ROBLOSECURITY=${robloxCookie}`,
-          'Roblox-Place-Id': placeId.toString(),
-        },
-        body: JSON.stringify(chunk),
-      });
-      if (!batchResp.ok) throw new Error(`Batch request failed: ${batchResp.status}`);
-      const locations = await batchResp.json();
-      if (DEVELOPER_MODE) console.log('Batch locations:', locations);
-      for (const loc of locations) {
-        locationsMap[loc.requestId] = loc;
+      // Group items by creator to use the correct placeId
+      const creatorGroups = {};
+      for (const item of chunk) {
+        const creatorKey = `${item.creatorType}:${item.creatorId}`;
+        if (!creatorGroups[creatorKey]) creatorGroups[creatorKey] = [];
+        creatorGroups[creatorKey].push(item);
+      }
+      
+      // Process each creator group separately
+      for (const [creatorKey, items] of Object.entries(creatorGroups)) {
+        let [creatorType, creatorId] = creatorKey.split(':');
+        let placeId = placeIdMap[creatorKey] || 99840799534728;
+        let retryCount = 0;
+        const maxRetries = 5;
+        
+        while (retryCount <= maxRetries) {
+          const itemsWithoutCreator = items.map(({ creatorType, creatorId, ...rest }) => rest);
+          
+          if (DEVELOPER_MODE) console.log(`(Dev) Batch request for ${creatorKey}: ${items.length} items with placeId ${placeId}${retryCount > 0 ? ` (retry ${retryCount}/${maxRetries})` : ''}`);
+          
+          const batchResp = await fetch('https://assetdelivery.roblox.com/v2/assets/batch', {
+            method: 'POST',
+            headers: {
+              'User-Agent': 'RobloxStudio/WinInet',
+              'Content-Type': 'application/json',
+              'Cookie': `.ROBLOSECURITY=${robloxCookie}`,
+              'Roblox-Place-Id': placeId.toString(),
+            },
+            body: JSON.stringify(itemsWithoutCreator),
+          });
+          if (!batchResp.ok) throw new Error(`Batch request failed for ${creatorKey}: ${batchResp.status}`);
+          const locations = await batchResp.json();
+          if (DEVELOPER_MODE) console.log(`(Dev) Batch response for ${creatorKey}:`, locations);
+          
+          // Check if response contains batch errors (403s for restricted assets)
+          const hasBatchErrors = locations.some(loc => loc.errors && loc.errors.length > 0 && loc.errors[0].code === 403);
+          
+          if (hasBatchErrors && retryCount < maxRetries) {
+            if (DEVELOPER_MODE) console.log(`(Dev) Batch errors detected for ${creatorKey}. Fetching new placeId and retrying...`);
+            try {
+              placeId = await retryAsync(
+                () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie),
+                1,
+                1000
+              );
+              placeIdMap[creatorKey] = placeId;
+              if (DEVELOPER_MODE) console.log(`(Dev) Got new placeId for ${creatorKey}: ${placeId}`);
+              retryCount++;
+              continue;
+            } catch (refreshErr) {
+              if (DEVELOPER_MODE) console.warn(`(Dev) Failed to refresh placeId for ${creatorKey}: ${refreshErr.message}`);
+              break;
+            }
+          }
+          
+          for (const loc of locations) {
+            locationsMap[loc.requestId] = loc;
+          }
+          break;
+        }
       }
     } catch (error) {
       console.error('Batch request error:', error);
       hasAuthError = true;
-      sendStatusMessage(`Authentication failed: ${error.message}`);
+      sendStatusMessage(`Batch request failed: ${error.message}`);
       for (const item of chunk) {
         const transfer = initialTransferStates.find((t) => t.originalAssetId === item.requestId);
         if (transfer) sendTransferUpdate({ id: transfer.id, status: 'error', error: 'Batch request failed' });
@@ -248,7 +301,9 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     const downloadTransfer = initialTransferStates.find((t) => t.originalAssetId === entry.id);
     const downloadTransferId = downloadTransfer.id;
     sendTransferUpdate({ id: downloadTransferId, status: 'processing' });
-    const result = await downloadAnimationAssetWithProgress(url, robloxCookie, filePath, downloadTransferId, entry.name, entry.id, sendTransferUpdate);
+    const creatorKey = `${entry.creatorType}:${entry.creatorId}`;
+    const entryPlaceId = placeIdMap[creatorKey] || 99840799534728;
+    const result = await downloadAnimationAssetWithProgress(url, robloxCookie, filePath, downloadTransferId, entry.name, entry.id, sendTransferUpdate, entryPlaceId);
     downloadCompleted++;
     sendStatusMessage(`Downloaded ${downloadCompleted}/${animationEntries.length} animations`);
     return { entry, filePath: result.success ? filePath : null, success: result.success, error: result.error };
@@ -281,7 +336,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         error: err.message.substring(0, 120),
       });
     };
-    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, entry.creatorType === 'group' ? entry.creatorId : data.groupId, uploadTransferId, sendTransferUpdate);
+    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate);
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);
       uploadCompleted++;
