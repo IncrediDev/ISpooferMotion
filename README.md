@@ -1,8 +1,8 @@
 # ISpooferMotion
 
 **ISpooferMotion** is an animation spoofing utility designed for Roblox developers and animators. It helps you quickly upload and apply animation overrides.
-
-## Notice : Currently only working for owned/public assets, I'm actively searching for a work around; If you have any ideas feel free to join the discord https://discord.gg/d5cJzAURBH
+- ![#c5f015](https://placehold.co/15x15/c5f015/c5f015.png) `#c5f015`
+## STATUS : WORKING!; If you have any ideas feel free to join the discord https://discord.gg/d5cJzAURBH
 
 ## Features
 
