@@ -334,8 +334,16 @@
   </div>
 
   <div class="main-content">
+    <div class="toggle-group" style="margin-bottom: 15px;">
+      <label for="spoof-sounds" class="toggle-label">Spoof Sounds</label>
+      <label class="switch">
+        <input type="checkbox" id="spoof-sounds">
+        <span class="slider"></span>
+      </label>
+    </div>
+
     <div class="form-group">
-      <label for="animationId">Animation Id Input</label>
+      <label for="animationId" id="assetIdLabel">Animation Id Input</label>
       <div class="input-with-button-container">
         <textarea id="animationId" name="animationId" rows="3" class="input-box" placeholder="Enter or paste Animation ID"></textarea>
         <button id="paste-animationId-btn" class="input-action-btn" title="Paste Animation ID">📥</button>
@@ -370,6 +378,10 @@
     </div>
 
     <button id="run-spoofer-btn">Run Spoofer</button>
+
+    <div id="audio-quota-info" style="margin-top: 10px; padding: 10px; background-color: var(--input-bg); border-radius: 4px; font-size: 13px; color: var(--label-color); display: none;">
+      <span id="audio-quota-text">Checking audio quota...</span>
+    </div>
 
     <div class="output-area">
       <textarea id="output-data" class="input-box" readonly placeholder="Output will appear here..."></textarea>
@@ -406,6 +418,8 @@
     const outputDataTextarea = document.getElementById('output-data');
     const animationIdTextarea = document.getElementById('animationId');
     const pasteAnimationIdBtn = document.getElementById('paste-animationId-btn');
+    const spoofSoundsToggle = document.getElementById('spoof-sounds');
+    const assetIdLabel = document.getElementById('assetIdLabel');
     const robloxCookieInput = document.getElementById('robloxCookie');
     const autoDetectCookieToggle = document.getElementById('autoDetectCookie');
     const groupIdInput = document.getElementById('groupId'); // Get reference
@@ -517,8 +531,162 @@
         }
     }
     if (autoDetectCookieToggle) {
-        autoDetectCookieToggle.addEventListener('change', updateRobloxCookieInputState);
+        autoDetectCookieToggle.addEventListener('change', async () => {
+            updateRobloxCookieInputState();
+            // Re-fetch audio quota when auto-detect changes
+            if (spoofSoundsToggle && spoofSoundsToggle.checked) {
+                audioQuotaText.textContent = 'Checking audio quota...';
+                audioQuotaInfo.style.display = 'block';
+                currentAudioQuota = await fetchAudioQuota();
+                updateAudioQuotaDisplay();
+            }
+        });
         updateRobloxCookieInputState(); // Initial state
+    }
+
+    // Re-fetch audio quota when cookie input changes (with debounce)
+    let cookieInputTimeout;
+    if (robloxCookieInput) {
+        robloxCookieInput.addEventListener('input', () => {
+            if (spoofSoundsToggle && spoofSoundsToggle.checked) {
+                clearTimeout(cookieInputTimeout);
+                cookieInputTimeout = setTimeout(async () => {
+                    if (robloxCookieInput.value.trim()) {
+                        audioQuotaText.textContent = 'Checking audio quota...';
+                        audioQuotaInfo.style.display = 'block';
+                        currentAudioQuota = await fetchAudioQuota();
+                        updateAudioQuotaDisplay();
+                    }
+                }, 500); // Wait 500ms after user stops typing
+            }
+        });
+    }
+
+    // --- Spoof Sounds Toggle Logic ---
+    const audioQuotaInfo = document.getElementById('audio-quota-info');
+    const audioQuotaText = document.getElementById('audio-quota-text');
+    let currentAudioQuota = null;
+
+    async function fetchAudioQuota() {
+        if (!window.electronAPI || !window.electronAPI.fetchAudioQuota) {
+            console.error('[QUOTA DEBUG] electronAPI.fetchAudioQuota not available');
+            return null;
+        }
+        try {
+            const robloxCookie = robloxCookieInput.value;
+            const autoDetect = autoDetectCookieToggle.checked;
+            console.log('[QUOTA DEBUG] Fetching audio quota...', { hasCookie: !!robloxCookie, autoDetect });
+            
+            if (!robloxCookie && !autoDetect) {
+                console.log('[QUOTA DEBUG] No cookie provided and auto-detect is off');
+                return null;
+            }
+            
+            const quota = await window.electronAPI.fetchAudioQuota(robloxCookie, autoDetect);
+            console.log('[QUOTA DEBUG] Received quota data:', quota);
+            
+            if (quota && quota.error) {
+                console.error('[QUOTA DEBUG] Error from API:', quota.error);
+                return null;
+            }
+            
+            return quota;
+        } catch (err) {
+            console.error('[QUOTA DEBUG] Failed to fetch audio quota:', err);
+            return null;
+        }
+    }
+
+    function countSoundEntries() {
+        const text = animationIdTextarea.value || '';
+        const lines = text.split('\n');
+        let count = 0;
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            if (/^\[([^\]]+)\]\s*\[([^\]]+)\]\s*\[([^\]]+)\],?$/.test(trimmed)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    function updateAudioQuotaDisplay() {
+        if (!spoofSoundsToggle.checked) {
+            audioQuotaInfo.style.display = 'none';
+            return;
+        }
+        
+        if (!currentAudioQuota) {
+            audioQuotaInfo.style.display = 'block';
+            audioQuotaText.textContent = 'Unable to fetch audio quota. Please ensure cookie is valid.';
+            return;
+        }
+
+        // Handle both response formats
+        let quota = null;
+        if (currentAudioQuota.quotas && currentAudioQuota.quotas.length > 0) {
+            // New format: { quotas: [{ duration: 'Month', usage, capacity, ... }] }
+            const monthQuota = currentAudioQuota.quotas.find(q => q.duration === 'Month');
+            if (monthQuota) {
+                quota = {
+                    usage: monthQuota.usage,
+                    capacity: monthQuota.capacity,
+                    remainingQuota: monthQuota.capacity - monthQuota.usage
+                };
+            }
+        } else if (currentAudioQuota.usage) {
+            // Old format: { usage: { remainingQuota: X } }
+            quota = currentAudioQuota.usage;
+        }
+
+        if (!quota) {
+            audioQuotaInfo.style.display = 'block';
+            audioQuotaText.textContent = 'Unable to parse audio quota data.';
+            console.error('[QUOTA DEBUG] Invalid quota data structure:', currentAudioQuota);
+            return;
+        }
+
+        const soundCount = countSoundEntries();
+        const remaining = quota.remainingQuota;
+        const afterSpoof = Math.max(0, remaining - soundCount);
+        
+        audioQuotaInfo.style.display = 'block';
+        if (soundCount > remaining) {
+            audioQuotaText.innerHTML = `⚠️ You can upload <strong>${remaining}</strong> more audio assets this month. After spoofing <strong>${soundCount}</strong> sounds: <strong style="color: var(--red-accent);">Quota exceeded by ${soundCount - remaining}</strong>`;
+        } else {
+            audioQuotaText.innerHTML = `✓ You can upload <strong>${remaining}</strong> more audio assets this month. After spoofing <strong>${soundCount}</strong> sounds: <strong>${afterSpoof}</strong> remaining`;
+        }
+        
+        if (DEVELOPER_MODE) console.log('[QUOTA DEBUG] Display updated:', { remaining, soundCount, afterSpoof });
+    }
+
+    if (spoofSoundsToggle && assetIdLabel && animationIdTextarea && pasteAnimationIdBtn) {
+        spoofSoundsToggle.addEventListener('change', async () => {
+            if (spoofSoundsToggle.checked) {
+                assetIdLabel.textContent = 'Sound Id Input';
+                animationIdTextarea.placeholder = 'Enter or paste Sound ID';
+                pasteAnimationIdBtn.title = 'Paste Sound ID';
+                
+                // Fetch audio quota
+                audioQuotaText.textContent = 'Checking audio quota...';
+                audioQuotaInfo.style.display = 'block';
+                currentAudioQuota = await fetchAudioQuota();
+                updateAudioQuotaDisplay();
+            } else {
+                assetIdLabel.textContent = 'Animation Id Input';
+                animationIdTextarea.placeholder = 'Enter or paste Animation ID';
+                pasteAnimationIdBtn.title = 'Paste Animation ID';
+                audioQuotaInfo.style.display = 'none';
+            }
+        });
+
+        // Update quota display when input changes
+        animationIdTextarea.addEventListener('input', () => {
+            if (spoofSoundsToggle.checked) {
+                updateAudioQuotaDisplay();
+            }
+        });
     }
 
     // --- "Run Spoofer" Button Logic ---
@@ -534,7 +702,8 @@
                 robloxCookie: robloxCookieInput.value,
                 groupId: groupIdInput.value,
                 enableSpoofing: enableSpoofingToggle.checked,
-                autoDetectCookie: autoDetectCookieToggle.checked
+                autoDetectCookie: autoDetectCookieToggle.checked,
+                spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false
             };
 
             console.log("Renderer sending data to main:", data);

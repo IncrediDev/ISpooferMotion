@@ -40,14 +40,61 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
   ipcMain.on('run-spoofer-action', async (event, data) => {
     await handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, sendSpooferResultToRenderer, sendStatusMessage);
   });
+
+  ipcMain.handle('fetch-audio-quota', async (event, data) => {
+    try {
+      if (DEVELOPER_MODE) console.log('(Dev) Fetching audio quota with data:', { hasCookie: !!data.cookie, autoDetect: data.autoDetect });
+      
+      let cookie = data.cookie;
+      if (data.autoDetect && !cookie) {
+        if (DEVELOPER_MODE) console.log('(Dev) Auto-detecting cookie...');
+        cookie = await getCookieFromRobloxStudio();
+        if (DEVELOPER_MODE) console.log('(Dev) Auto-detected cookie:', cookie ? 'Found' : 'Not found');
+      }
+      if (!cookie) {
+        if (DEVELOPER_MODE) console.log('(Dev) No cookie available for quota check');
+        return { error: 'No cookie provided' };
+      }
+
+      if (DEVELOPER_MODE) console.log('(Dev) Fetching from Roblox API...');
+      const response = await fetch('https://publish.roblox.com/v1/asset-quotas?resourceType=RateLimitUpload&assetType=Audio', {
+        headers: {
+          'Cookie': `.ROBLOSECURITY=${cookie}`,
+          'User-Agent': 'RobloxStudio/WinInet',
+        }
+      });
+
+      if (DEVELOPER_MODE) console.log('(Dev) Quota API response status:', response.status);
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (DEVELOPER_MODE) console.log('(Dev) Quota API error:', errorText);
+        return { error: `Failed to fetch quota: ${response.status}` };
+      }
+
+      const quotaData = await response.json();
+      if (DEVELOPER_MODE) console.log('(Dev) Quota data received:', quotaData);
+      return quotaData;
+    } catch (err) {
+      console.error('Error fetching audio quota:', err);
+      return { error: err.message };
+    }
+  });
 }
 
 /**
  * Main spoofer action handler
  */
 async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, sendSpooferResultToRenderer, sendStatusMessage) {
-  if (DEVELOPER_MODE) console.log('MAIN_PROCESS (Dev): Received run-spoofer-action with data:', data);
-  else console.log('MAIN_PROCESS: Received run-spoofer-action.');
+  if (DEVELOPER_MODE) {
+    // Sanitize sensitive data before logging
+    const sanitizedData = { ...data };
+    if (sanitizedData.robloxCookie) {
+      sanitizedData.robloxCookie = '{Cookie:Here}';
+    }
+    console.log('MAIN_PROCESS (Dev): Received run-spoofer-action with data:', sanitizedData);
+  } else {
+    console.log('MAIN_PROCESS: Received run-spoofer-action.');
+  }
 
   const downloadsDir = path.join(app.getPath('userData'), 'ispoofer_downloads');
 
@@ -62,8 +109,10 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     return;
   }
 
-  // Parse animations
-  const animationEntries = (data.animationId || '')
+  // Parse animations or sounds
+  const isSoundMode = data.spoofSounds === true;
+  const assetTypeName = isSoundMode ? 'Audio' : 'Animation';
+  const assetEntries = (data.animationId || '')
     .split('\n')
     .map((line) => {
       const trimmedLine = line.trim();
@@ -87,10 +136,13 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     })
     .filter((entry) => entry && entry.id && entry.creatorId);
 
-  if (animationEntries.length === 0) {
-    sendSpooferResultToRenderer({ output: 'No valid animation entries.', success: false });
+  if (assetEntries.length === 0) {
+    sendSpooferResultToRenderer({ output: `No valid ${isSoundMode ? 'sound' : 'animation'} entries.`, success: false });
     return;
   }
+
+  // For backwards compatibility with code that expects animationEntries
+  const animationEntries = assetEntries;
 
   // Get cookie
   const firstEntry = animationEntries[0];
@@ -134,7 +186,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     return;
   }
 
-  let verboseOutputMessage = `Processing ${animationEntries.length} animation(s)...\n`;
+  let verboseOutputMessage = `Processing ${animationEntries.length} ${isSoundMode ? 'sound' : 'animation'}(s)...\n`;
   let successfulUploadCount = 0;
   let downloadedSuccessfullyCount = 0;
   let uploadMappingOutput = '';
@@ -196,13 +248,13 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   const batchItems = animationEntries.map((entry) => ({
     requestId: entry.id,
     assetId: parseInt(entry.id),
-    assetType: 'Animation',
+    assetType: assetTypeName,
     creatorType: entry.creatorType,
     creatorId: entry.creatorId,
   }));
   const chunkSize = 50;
 
-  if (DEVELOPER_MODE) console.log(`(Dev) Fetching batch locations for ${batchItems.length} animations with creator-specific placeIds`);
+  if (DEVELOPER_MODE) console.log(`(Dev) Fetching batch locations for ${batchItems.length} ${isSoundMode ? 'sounds' : 'animations'} with creator-specific placeIds`);
   for (let i = 0; i < batchItems.length; i += chunkSize) {
     const chunk = batchItems.slice(i, i + chunkSize);
     try {
@@ -296,7 +348,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     if (!loc.locations || loc.locations.length === 0) return { entry, success: false, error: 'No locations in batch response' };
     const url = loc.locations[0].location;
     const sanitizedName = sanitizeFilename(entry.name);
-    const fileName = `${sanitizedName}_${entry.id}.rbxm`;
+    const fileExtension = isSoundMode ? '.ogg' : '.rbxm';
+    const fileName = `${sanitizedName}_${entry.id}${fileExtension}`;
     const filePath = path.join(downloadsDir, fileName);
     const downloadTransfer = initialTransferStates.find((t) => t.originalAssetId === entry.id);
     const downloadTransferId = downloadTransfer.id;
@@ -305,13 +358,13 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     const entryPlaceId = placeIdMap[creatorKey] || 99840799534728;
     const result = await downloadAnimationAssetWithProgress(url, robloxCookie, filePath, downloadTransferId, entry.name, entry.id, sendTransferUpdate, entryPlaceId);
     downloadCompleted++;
-    sendStatusMessage(`Downloaded ${downloadCompleted}/${animationEntries.length} animations`);
+    sendStatusMessage(`Downloaded ${downloadCompleted}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'}`);
     return { entry, filePath: result.success ? filePath : null, success: result.success, error: result.error };
   });
   const downloadResults = await Promise.all(downloadPromises);
 
   // Parallel uploads
-  sendStatusMessage('Uploading animations...');
+  sendStatusMessage(`Uploading ${isSoundMode ? 'sounds' : 'animations'}...`);
   let uploadCompleted = 0;
   const successfulDownloads = downloadResults.filter((r) => r.success);
   const uploadPromises = successfulDownloads.map(async (downloadResult) => {
@@ -336,16 +389,16 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         error: err.message.substring(0, 120),
       });
     };
-    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate);
+    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName);
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);
       uploadCompleted++;
-      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} animations`);
+      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}`);
       return { entry, success: uploadResult.success, assetId: uploadResult.assetId, error: uploadResult.error };
     } catch (finalRetryError) {
       sendTransferUpdate({ id: uploadTransferId, status: 'error', error: `All upload attempts failed: ${finalRetryError.message}` });
       uploadCompleted++;
-      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} animations`);
+      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}`);
       return { entry, success: false, error: finalRetryError.message };
     }
   });
@@ -363,10 +416,10 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         if (uploadResult.success) {
           successfulUploadCount++;
           uploadMappingOutput += `${entry.id} = ${uploadResult.assetId},\n`;
-          verboseOutputMessage += `✓ Uploaded: ${entry.name} (Old ID: ${entry.id}) -> New ID: ${uploadResult.assetId}\n`;
+          verboseOutputMessage += `✓ Uploaded ${isSoundMode ? 'Sound' : 'Animation'}: ${entry.name} (Original ID: ${entry.id}) -> New Asset ID: ${uploadResult.assetId}\n`;
         } else {
-          console.error(`[UPLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}`);
-          verboseOutputMessage += `✗ Upload Failed: ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}\n`;
+          console.error(`[${isSoundMode ? 'SOUND' : 'ANIMATION'} UPLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}`);
+          verboseOutputMessage += `✗ ${isSoundMode ? 'Sound' : 'Animation'} Upload Failed: ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}\n`;
         }
       } else {
         console.error(`[UPLOAD SKIPPED] ${entry.name} (ID: ${entry.id}): Download failed.`);
@@ -377,6 +430,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
       verboseOutputMessage += `✗ Download Failed: ${entry.name} (ID: ${entry.id}) — ${downloadResult.error}\n`;
     }
   }
+
+  verboseOutputMessage += `\n--- Summary ---\nTotal ${isSoundMode ? 'sounds' : 'animations'}: ${animationEntries.length}\nDownloaded: ${downloadedSuccessfullyCount}\nUploaded: ${successfulUploadCount}\n\n--- Output Mapping ---\n${uploadMappingOutput}`;
 
   try {
     sendStatusMessage(`Operation Successful: ${successfulUploadCount}/${animationEntries.length}`);
@@ -390,17 +445,25 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     finalOutput = uploadMappingOutput.trim().replace(/,$/, '');
   } else {
     if (downloadedSuccessfullyCount > 0 && csrfToken && successfulUploadCount === 0) {
-      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}), but no animations were successfully uploaded.`;
+      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}), but no ${isSoundMode ? 'sounds' : 'animations'} were successfully uploaded.`;
     } else if (downloadedSuccessfullyCount > 0 && !csrfToken) {
       finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}). Uploads skipped (CSRF token missing).`;
     } else if (animationEntries.length > 0) {
-      finalOutput = hasAuthError ? 'Authentication failed. Please check your Roblox cookie.' : 'No animations were successfully processed to provide mappings.';
+      finalOutput = hasAuthError ? 'Authentication failed. Please check your Roblox cookie.' : `No ${isSoundMode ? 'sounds' : 'animations'} were successfully processed to provide mappings.`;
     } else {
       finalOutput = 'No operations performed.';
     }
   }
 
   sendSpooferResultToRenderer({ output: finalOutput, success: downloadedSuccessfullyCount > 0 || successfulUploadCount > 0 });
+
+  // Clear downloads directory after operation completes
+  try {
+    await clearDownloadsDirectory(downloadsDir, false);
+    if (DEVELOPER_MODE) console.log('(Dev) Downloads directory cleared after operation');
+  } catch (err) {
+    if (DEVELOPER_MODE) console.warn('(Dev) Failed to clear downloads directory after operation:', err.message);
+  }
 }
 
 module.exports = {

@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runSpooferAction: (data) => ipcRenderer.send('run-spoofer-action', data),
 
   // Listen for results/output from the spoofer action
-  onSpooferResult: (callback) => ipcRenderer.on('spoofer-result', (event, ...args) => callback(...args))
+  onSpooferResult: (callback) => ipcRenderer.on('spoofer-result', (event, ...args) => callback(...args)),
+
+  // Fetch audio quota from Roblox API
+  fetchAudioQuota: (cookie, autoDetect) => ipcRenderer.invoke('fetch-audio-quota', { cookie, autoDetect })
   
 });

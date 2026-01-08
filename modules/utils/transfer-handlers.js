@@ -64,9 +64,9 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
 }
 
 /**
- * Publishes an animation RBXM file to Roblox
+ * Publishes an animation or sound RBXM file to Roblox
  */
-async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToken, groupId = null, transferId, sendTransferUpdate) {
+async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToken, groupId = null, transferId, sendTransferUpdate, assetTypeName = 'Animation') {
   let fileBuffer;
   let fileSize = 0;
   try {
@@ -87,47 +87,124 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
     error: null,
   });
 
-  const uploadUrl = new URL('https://www.roblox.com/ide/publish/uploadnewanimation');
-  uploadUrl.searchParams.set('assetTypeName', 'Animation');
-  uploadUrl.searchParams.set('name', name);
-  uploadUrl.searchParams.set('description', 'Placeholder');
-  uploadUrl.searchParams.set('ispublic', 'false');
-  uploadUrl.searchParams.set('allowComments', 'true');
-  uploadUrl.searchParams.set('isGamesAsset', 'false');
-  if (groupId) uploadUrl.searchParams.set('groupId', groupId);
-
-  const headers = {
-    'Content-Type': 'application/octet-stream',
-    'Cookie': `.ROBLOSECURITY=${cookie}`,
-    'X-CSRF-TOKEN': csrfToken,
-    'User-Agent': 'RobloxStudio/WinInet',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-  };
-
-  if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG - FETCH] Attempting upload for "${name}" to: ${uploadUrl.toString()}`);
-
-  try {
-    const response = await fetch(uploadUrl.toString(), {
-      method: 'POST',
-      headers,
-      body: fileBuffer,
-    });
-    const bodyText = await response.text();
-    if (!response.ok) {
-      throw new Error(`Upload failed (Status: ${response.status}). Response: ${bodyText.substring(0, 350)}`);
+  // Use different endpoint for Audio vs Animation
+  const isAudio = assetTypeName === 'Audio';
+  
+  if (isAudio) {
+    // Use modern API for audio uploads - need to get CSRF token for publish.roblox.com domain
+    let publishCsrfToken = csrfToken;
+    
+    // Get a fresh CSRF token specifically for publish.roblox.com
+    try {
+      const csrfResponse = await fetch('https://publish.roblox.com/v1/audio', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': `.ROBLOSECURITY=${cookie}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const newToken = csrfResponse.headers.get('x-csrf-token');
+      if (newToken) {
+        publishCsrfToken = newToken;
+        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Got fresh CSRF token for publish.roblox.com`);
+      }
+    } catch (csrfError) {
+      if (DEVELOPER_MODE) console.warn(`[UPLOAD DEBUG] Failed to get fresh CSRF token, using existing one:`, csrfError.message);
     }
-    const newAssetId = bodyText.trim();
-    if (newAssetId && /^\d+$/.test(newAssetId)) {
-      sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: newAssetId });
-      return { success: true, assetId: newAssetId };
-    } else {
-      throw new Error(`Upload successful (Status ${response.status}) but the response was not a valid Asset ID. Response: "${bodyText.substring(0, 350)}"`);
+
+    const uploadUrl = 'https://publish.roblox.com/v1/audio';
+    
+    // Create JSON payload for audio upload
+    const payload = {
+      name: name,
+      file: fileBuffer.toString('base64'),
+      assetPrivacy: 1,
+      estimatedFileSize: fileSize,
+      estimatedDuration: 0,
+      paymentSource: 'User'
+    };
+    if (groupId) payload.groupId = parseInt(groupId);
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Cookie': `.ROBLOSECURITY=${cookie}`,
+      'x-csrf-token': publishCsrfToken,
+      'User-Agent': 'RobloxStudio/WinInet',
+    };
+
+    if (DEVELOPER_MODE) {
+      console.log(`[UPLOAD DEBUG - FETCH] Attempting ${assetTypeName} upload for "${name}" to: ${uploadUrl}`);
+      console.log(`[UPLOAD DEBUG] Payload size: ${fileSize} bytes (base64: ${payload.file.length} chars)`);
     }
-  } catch (err) {
-    const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
-    console.error(`[UPLOAD ERROR - FETCH] ${errorMsg}`, err.cause || err);
-    sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
-    return { success: false, error: errorMsg };
+
+    try {
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
+      }
+      const newAssetId = responseData.Id || responseData.id || responseData.assetId;
+      if (newAssetId) {
+        sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: newAssetId.toString() });
+        return { success: true, assetId: newAssetId.toString() };
+      } else {
+        throw new Error(`Upload successful (Status ${response.status}) but the response did not contain an asset ID. Response: ${JSON.stringify(responseData)}`);
+      }
+    } catch (err) {
+      const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
+      console.error(`[UPLOAD ERROR - FETCH] ${assetTypeName} upload failed: ${errorMsg}`, err.cause || err);
+      sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
+      return { success: false, error: errorMsg };
+    }
+  } else {
+    // Use legacy endpoint for animation uploads
+    const uploadUrl = new URL('https://www.roblox.com/ide/publish/uploadnewanimation');
+    uploadUrl.searchParams.set('assetTypeName', assetTypeName);
+    uploadUrl.searchParams.set('name', name);
+    uploadUrl.searchParams.set('description', 'Placeholder');
+    uploadUrl.searchParams.set('ispublic', 'false');
+    uploadUrl.searchParams.set('allowComments', 'true');
+    uploadUrl.searchParams.set('isGamesAsset', 'false');
+    if (groupId) uploadUrl.searchParams.set('groupId', groupId);
+
+    const headers = {
+      'Content-Type': 'application/octet-stream',
+      'Cookie': `.ROBLOSECURITY=${cookie}`,
+      'X-CSRF-TOKEN': csrfToken,
+      'User-Agent': 'RobloxStudio/WinInet',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    };
+
+    if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG - FETCH] Attempting ${assetTypeName} upload for "${name}" to: ${uploadUrl.toString()}`);
+
+    try {
+      const response = await fetch(uploadUrl.toString(), {
+        method: 'POST',
+        headers,
+        body: fileBuffer,
+      });
+      const bodyText = await response.text();
+      if (!response.ok) {
+        throw new Error(`Upload failed (Status: ${response.status}). Response: ${bodyText.substring(0, 350)}`);
+      }
+      const newAssetId = bodyText.trim();
+      if (newAssetId && /^\d+$/.test(newAssetId)) {
+        sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: newAssetId });
+        return { success: true, assetId: newAssetId };
+      } else {
+        throw new Error(`Upload successful (Status ${response.status}) but the response was not a valid Asset ID. Response: "${bodyText.substring(0, 350)}"`);
+      }
+    } catch (err) {
+      const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
+      console.error(`[UPLOAD ERROR - FETCH] ${assetTypeName} upload failed: ${errorMsg}`, err.cause || err);
+      sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
+      return { success: false, error: errorMsg };
+    }
   }
 }
 
