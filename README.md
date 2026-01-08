@@ -47,6 +47,12 @@ Download the latest release executable from the [Releases](https://github.com/In
 - Upload your animation files.
 - Open Roblox Studio and use the ISpooferMotion plugin to link and spoof the animations.
 
+--- 
+
+  For people worried that this might be a virus [VirusTotal Scan](https://www.virustotal.com/gui/file/179d42ff33472726a96299ba4e7064aa6fc3a550d6da129721768e20c3714d4c/behavior)
+
+--- 
+
 ## License
 
 This project is licensed under the GPL-3.0-or-later license.
