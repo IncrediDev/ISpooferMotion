@@ -99,7 +99,7 @@ async function getCsrfToken(cookie) {
 }
 
 /**
- * Gets the first placeId from a creator (user or group)
+ * Gets the rootPlace from each game the creator owns
  */
 async function getPlaceIdFromCreator(creatorType, creatorId, cookie) {
   async function getGames(url) {
@@ -112,40 +112,49 @@ async function getPlaceIdFromCreator(creatorType, creatorId, cookie) {
     if (!data || !data.data || data.data.length === 0) {
       throw new Error(`No games found in response. Response: ${JSON.stringify(data).substring(0, 200)}`);
     }
-    if (DEVELOPER_MODE) console.log(`Found games for ${creatorType} ${creatorId}:`, data.data[0].id);
-    return data.data[0].id; // universeId
-  }
-
-  async function getPlace(universeId) {
-    const placesUrl = `https://develop.roblox.com/v1/universes/${universeId}/places?sortOrder=Asc&limit=10`;
-    const resp = await fetch(placesUrl, { headers: { Cookie: `.ROBLOSECURITY=${cookie}` } });
-    if (!resp.ok) {
-      const errorText = await resp.text();
-      throw new Error(`Failed to get places (${resp.status}): ${errorText.substring(0, 200)}`);
-    }
-    const data = await resp.json();
-    if (!data || !data.data || data.data.length === 0) {
-      throw new Error(`No places found in response. Response: ${JSON.stringify(data).substring(0, 200)}`);
-    }
-    if (DEVELOPER_MODE) console.log(`Found places for universe ${universeId}:`, data.data[0].id);
-    return data.data[0].id; // placeId
+    if (DEVELOPER_MODE) console.log(`Found ${data.data.length} games for ${creatorType} ${creatorId}`);
+    return data.data; // Return all games
   }
 
   let url;
   if (creatorType === 'group') {
-    // Try without accessFilter first, then with accessFilter=2
     url = `https://games.roblox.com/v2/groups/${creatorId}/games?limit=10`;
   } else {
     url = `https://games.roblox.com/v2/users/${creatorId}/games?sortOrder=Asc&limit=10`;
   }
   
   if (DEVELOPER_MODE) console.log(`(Dev) Fetching games from URL: ${url}`);
-  const universeId = await getGames(url);
-  return await getPlace(universeId);
+  const games = await getGames(url);
+  
+  // Extract rootPlace from each game
+  const rootPlaces = games
+    .filter(game => game.rootPlace && game.rootPlace.id)
+    .map(game => game.rootPlace.id);
+  
+  if (rootPlaces.length === 0) {
+    throw new Error('No root places found in games');
+  }
+  
+  if (DEVELOPER_MODE) console.log(`(Dev) Got ${rootPlaces.length} root places from different games: ${rootPlaces.join(', ')}`);
+  return rootPlaces; // Return array of root place IDs from each game
+}
+
+/**
+ * Gets multiple place IDs from a creator to use as fallbacks
+ */
+async function getMultiplePlaceIds(creatorType, creatorId, cookie) {
+  try {
+    const places = await getPlaceIdFromCreator(creatorType, creatorId, cookie);
+    return Array.isArray(places) ? places : [places];
+  } catch (err) {
+    if (DEVELOPER_MODE) console.warn(`(Dev) Failed to get place IDs: ${err.message}`);
+    return [];
+  }
 }
 
 module.exports = {
   getCookieFromRobloxStudio,
   getCsrfToken,
   getPlaceIdFromCreator,
+  getMultiplePlaceIds,
 };
