@@ -8,7 +8,7 @@
 
 ## 🟢 AUDIO SPOOFING STATUS : WORKING!
 
-Join the Discord for status updates! [https://discord.gg/d5cJzAURBH](https://discord.gg/d5cJzAURBH)
+Join the Discord for status updates and help! [https://discord.gg/d5cJzAURBH](https://discord.gg/d5cJzAURBH)
 
 * Image Spoofing Coming Soon
 
