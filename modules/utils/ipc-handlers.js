@@ -37,6 +37,17 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
     }
   });
 
+  ipcMain.on('open-logs-folder', () => {
+    const { shell } = require('electron');
+    const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
+    try {
+      shell.openPath(logsDir);
+      if (DEVELOPER_MODE) console.log('(Dev) Opened logs folder:', logsDir);
+    } catch (err) {
+      console.error('Failed to open logs folder:', err);
+    }
+  });
+
   ipcMain.on('run-spoofer-action', async (event, data) => {
     await handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, sendSpooferResultToRenderer, sendStatusMessage);
   });
@@ -79,6 +90,22 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
       return { error: err.message };
     }
   });
+
+  ipcMain.handle('select-folder', async (event) => {
+    const { dialog } = require('electron');
+    try {
+      const result = await dialog.showOpenDialog(getMainWindowFn(), {
+        properties: ['openDirectory', 'createDirectory']
+      });
+      if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+        return null;
+      }
+      return result.filePaths[0];
+    } catch (err) {
+      console.error('Error selecting folder:', err);
+      return null;
+    }
+  });
 }
 
 /**
@@ -96,7 +123,16 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     console.log('MAIN_PROCESS: Received run-spoofer-action.');
   }
 
-  const downloadsDir = path.join(app.getPath('userData'), 'ispoofer_downloads');
+  const downloadsDir = data.downloadOnly && data.downloadFolder && data.downloadFolder.trim()
+    ? data.downloadFolder.trim()
+    : path.join(app.getPath('userData'), 'ispoofer_downloads');
+
+  // Validate download-only mode requires folder selection
+  if (data.downloadOnly && (!data.downloadFolder || !data.downloadFolder.trim())) {
+    sendSpooferResultToRenderer({ output: 'Please select a download folder for Download-Only mode.', success: false });
+    sendStatusMessage('Error: No download folder selected');
+    return;
+  }
 
   const cleared = await clearDownloadsDirectory(downloadsDir);
   if (!cleared) {
@@ -104,8 +140,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     sendSpooferResultToRenderer({ output: 'Warning: Could not fully clear previous downloads.', success: false });
   }
 
-  if (!data.enableSpoofing) {
-    sendSpooferResultToRenderer({ output: 'Enable Spoofing toggle is OFF.', success: false });
+  if (!data.enableSpoofing && !data.downloadOnly) {
+    sendSpooferResultToRenderer({ output: 'Enable Spoofing toggle is OFF and Download-Only mode is not enabled.', success: false });
     return;
   }
 
@@ -239,9 +275,14 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         if (DEVELOPER_MODE) console.log(`(Dev) Successfully got ${placeIdMap[creatorKey].length} placeIds for ${creatorKey}: ${placeIdMap[creatorKey].join(', ')}`);
       } catch (error) {
         if (DEVELOPER_MODE) console.warn(`(Dev) Could not get placeIds for ${creatorKey} (will use fallback): ${error.message}`);
+        console.log(`[ERROR] Failed to fetch real place IDs for ${creatorKey}. Using fallback: 99840799534728`);
         placeIdMap[creatorKey] = [99840799534728]; // Temporary hardcoded fallback as array
       }
     }
+
+    // Debug: show the resolved placeId map once fetched
+    if (DEVELOPER_MODE) console.log('(Dev) Resolved placeIdMap:', placeIdMap);
+
   }
 
   // Batch download locations
@@ -287,7 +328,6 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
               'User-Agent': 'RobloxStudio/WinInet',
               'Content-Type': 'application/json',
               'Cookie': `.ROBLOSECURITY=${robloxCookie}`,
-              'Roblox-Place-Id': placeId.toString(),
             },
             body: JSON.stringify(itemsWithoutCreator),
           });
@@ -391,11 +431,16 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   });
   const downloadResults = await Promise.all(downloadPromises);
 
-  // Parallel uploads
-  sendStatusMessage(`Uploading ${isSoundMode ? 'sounds' : 'animations'}...`);
-  let uploadCompleted = 0;
-  const successfulDownloads = downloadResults.filter((r) => r.success);
-  const uploadPromises = successfulDownloads.map(async (downloadResult) => {
+  // Parallel uploads (skip if download-only mode)
+  let uploadResults = [];
+  if (data.downloadOnly) {
+    sendStatusMessage('Download-only mode: Skipping uploads');
+    if (DEVELOPER_MODE) console.log('(Dev) Download-only mode enabled, skipping all uploads');
+  } else {
+    sendStatusMessage(`Uploading ${isSoundMode ? 'sounds' : 'animations'}...`);
+    let uploadCompleted = 0;
+    const successfulDownloads = downloadResults.filter((r) => r.success);
+    const uploadPromises = successfulDownloads.map(async (downloadResult) => {
     const entry = downloadResult.entry;
     const filePath = downloadResult.filePath;
     const uploadTransferId = crypto.randomUUID();
@@ -430,7 +475,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
       return { entry, success: false, error: finalRetryError.message };
     }
   });
-  const uploadResults = await Promise.all(uploadPromises);
+    uploadResults = await Promise.all(uploadPromises);
+  }
 
   // Process results
   for (const downloadResult of downloadResults) {
@@ -439,19 +485,23 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     if (downloadResult.success) {
       downloadedSuccessfullyCount++;
       verboseOutputMessage += `✓ Downloaded: ${entry.name} (ID: ${entry.id}) to ${downloadResult.filePath}\n`;
-      const uploadResult = uploadResults.find((u) => u.entry.id === entry.id);
-      if (uploadResult) {
-        if (uploadResult.success) {
-          successfulUploadCount++;
-          uploadMappingOutput += `${entry.id} = ${uploadResult.assetId},\n`;
-          verboseOutputMessage += `✓ Uploaded ${isSoundMode ? 'Sound' : 'Animation'}: ${entry.name} (Original ID: ${entry.id}) -> New Asset ID: ${uploadResult.assetId}\n`;
+      
+      // Only process upload results if not in download-only mode
+      if (!data.downloadOnly) {
+        const uploadResult = uploadResults.find((u) => u.entry.id === entry.id);
+        if (uploadResult) {
+          if (uploadResult.success) {
+            successfulUploadCount++;
+            uploadMappingOutput += `${entry.id} = ${uploadResult.assetId},\n`;
+            verboseOutputMessage += `✓ Uploaded ${isSoundMode ? 'Sound' : 'Animation'}: ${entry.name} (Original ID: ${entry.id}) -> New Asset ID: ${uploadResult.assetId}\n`;
+          } else {
+            console.error(`[${isSoundMode ? 'SOUND' : 'ANIMATION'} UPLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}`);
+            verboseOutputMessage += `✗ ${isSoundMode ? 'Sound' : 'Animation'} Upload Failed: ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}\n`;
+          }
         } else {
-          console.error(`[${isSoundMode ? 'SOUND' : 'ANIMATION'} UPLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}`);
-          verboseOutputMessage += `✗ ${isSoundMode ? 'Sound' : 'Animation'} Upload Failed: ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}\n`;
+          console.error(`[UPLOAD SKIPPED] ${entry.name} (ID: ${entry.id}): Download failed.`);
+          verboseOutputMessage += `! Skipped Upload for ${entry.name}: Download failed.\n`;
         }
-      } else {
-        console.error(`[UPLOAD SKIPPED] ${entry.name} (ID: ${entry.id}): Download failed.`);
-        verboseOutputMessage += `! Skipped Upload for ${entry.name}: Download failed.\n`;
       }
     } else {
       console.error(`[DOWNLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${downloadResult.error}`);
@@ -459,17 +509,38 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     }
   }
 
-  verboseOutputMessage += `\n--- Summary ---\nTotal ${isSoundMode ? 'sounds' : 'animations'}: ${animationEntries.length}\nDownloaded: ${downloadedSuccessfullyCount}\nUploaded: ${successfulUploadCount}\n\n--- Output Mapping ---\n${uploadMappingOutput}`;
+  verboseOutputMessage += `\n--- Summary ---\nTotal ${isSoundMode ? 'sounds' : 'animations'}: ${animationEntries.length}\nDownloaded: ${downloadedSuccessfullyCount}\n`;
+  if (!data.downloadOnly) {
+    verboseOutputMessage += `Uploaded: ${successfulUploadCount}\n\n--- Output Mapping ---\n${uploadMappingOutput}`;
+  } else {
+    verboseOutputMessage += `Uploads: Skipped (Download-Only Mode)\n`;
+  }
 
   try {
-    sendStatusMessage(`Operation Successful: ${successfulUploadCount}/${animationEntries.length}`);
+    if (data.downloadOnly) {
+      sendStatusMessage(`Download Complete: ${downloadedSuccessfullyCount}/${animationEntries.length} files saved to ${downloadsDir}`);
+    } else {
+      sendStatusMessage(`Operation Successful: ${successfulUploadCount}/${animationEntries.length}`);
+    }
   } catch (e) {
     if (DEVELOPER_MODE) console.warn('(Dev) Failed to send final status message', e);
   }
 
-  // Output with mappings only
+  // Output with mappings only (or download summary for download-only mode)
   let finalOutput = '';
-  if (uploadMappingOutput.trim()) {
+  if (data.downloadOnly) {
+    // Download-only mode: show list of downloaded files
+    const successfulDownloadsList = downloadResults
+      .filter(r => r.success)
+      .map(r => `${r.entry.name} (ID: ${r.entry.id})`)
+      .join('\n');
+    
+    if (successfulDownloadsList) {
+      finalOutput = `Downloaded ${downloadedSuccessfullyCount}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'} to:\n${downloadsDir}\n\nFiles:\n${successfulDownloadsList}`;
+    } else {
+      finalOutput = `No ${isSoundMode ? 'sounds' : 'animations'} were successfully downloaded.`;
+    }
+  } else if (uploadMappingOutput.trim()) {
     finalOutput = uploadMappingOutput.trim().replace(/,$/, '');
   } else {
     if (downloadedSuccessfullyCount > 0 && csrfToken && successfulUploadCount === 0) {
@@ -485,12 +556,16 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
 
   sendSpooferResultToRenderer({ output: finalOutput, success: downloadedSuccessfullyCount > 0 || successfulUploadCount > 0 });
 
-  // Clear downloads directory after operation completes
-  try {
-    await clearDownloadsDirectory(downloadsDir, false);
-    if (DEVELOPER_MODE) console.log('(Dev) Downloads directory cleared after operation');
-  } catch (err) {
-    if (DEVELOPER_MODE) console.warn('(Dev) Failed to clear downloads directory after operation:', err.message);
+  // Clear downloads directory after operation completes (only if using temp directory, not user-selected folder)
+  if (!data.downloadOnly) {
+    try {
+      await clearDownloadsDirectory(downloadsDir, false);
+      if (DEVELOPER_MODE) console.log('(Dev) Downloads directory cleared after operation');
+    } catch (err) {
+      if (DEVELOPER_MODE) console.warn('(Dev) Failed to clear downloads directory after operation:', err.message);
+    }
+  } else {
+    if (DEVELOPER_MODE) console.log('(Dev) Download-only mode: keeping files in', downloadsDir);
   }
 }
 

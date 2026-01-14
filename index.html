@@ -307,9 +307,29 @@
       background: transparent;
       border: none;
       padding: 4px;
+      cursor: pointer;
     }
     /* Slight hover feedback */
     #discord-btn:hover { opacity: 0.95; transform: translateY(-1px); }
+
+    /* Logs folder button */
+    #logs-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      padding: 4px 8px;
+      cursor: pointer;
+      color: var(--label-color);
+      font-size: 12px;
+      border-radius: 4px;
+      transition: background-color 0.2s, color 0.2s;
+    }
+    #logs-btn:hover {
+      background-color: var(--input-bg);
+      color: var(--text-color);
+    }
 
     #run-spoofer-btn:disabled {
         background-color: #303235;
@@ -360,11 +380,26 @@
       <input type="text" id="groupId" name="groupId" placeholder="Leave empty if you dont want to upload to group">
     </div>
 
+    <div class="form-group" id="download-folder-group" style="display: none;">
+      <label for="downloadFolder">Download Folder</label>
+      <div style="display: flex; gap: 8px;">
+        <input type="text" id="downloadFolder" name="downloadFolder" placeholder="Select folder for downloads" readonly>
+        <button id="select-folder-btn" style="padding: 10px 20px; background-color: var(--green-accent); color: var(--text-color); border: none; border-radius: 4px; cursor: pointer; white-space: nowrap;">Browse</button>
+      </div>
+    </div>
+
     <div class="toggles-container">
       <div class="toggle-group">
         <label for="enable-spoofing" class="toggle-label">Enable Spoofing</label>
         <label class="switch">
           <input type="checkbox" id="enable-spoofing" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-group">
+        <label for="download-only" class="toggle-label">Download Files Only</label>
+        <label class="switch">
+          <input type="checkbox" id="download-only">
           <span class="slider"></span>
         </label>
       </div>
@@ -393,6 +428,7 @@
   <div id="status-bar">
     <span id="status-text">Ready</span> <!-- Initial status message -->
     <span id="status-right" style="float: right; display: flex; align-items: center; gap: 8px;">
+      <button id="logs-btn" title="Open logs folder" aria-label="Open Logs Folder">📁 Logs</button>
       <span id="version-text" style="color: var(--label-color); font-size: 12px;">v?</span>
       <button id="discord-btn" title="Join for support or questions!" aria-label="Join Discord">
         <!-- Replaced SVG: uses Discord default purple as provided -->
@@ -424,6 +460,10 @@
     const autoDetectCookieToggle = document.getElementById('autoDetectCookie');
     const groupIdInput = document.getElementById('groupId'); // Get reference
     const enableSpoofingToggle = document.getElementById('enable-spoofing'); // Get reference
+    const downloadOnlyToggle = document.getElementById('download-only'); // Get reference
+    const downloadFolderGroup = document.getElementById('download-folder-group'); // Get reference
+    const downloadFolderInput = document.getElementById('downloadFolder'); // Get reference
+    const selectFolderBtn = document.getElementById('select-folder-btn'); // Get reference
     const runSpooferBtn = document.getElementById('run-spoofer-btn'); // Get reference
     const statusTextElement = document.getElementById('status-text');
 
@@ -449,6 +489,18 @@
     }).catch(err => { console.warn('Failed to get app version:', err); });
   } else {
     console.warn('electronAPI.getAppVersion not found.');
+  }
+
+  // --- Logs button (open logs folder) ---
+  const logsBtn = document.getElementById('logs-btn');
+  if (logsBtn) {
+    logsBtn.addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.openLogsFolder) {
+        window.electronAPI.openLogsFolder();
+      } else {
+        console.warn('electronAPI.openLogsFolder not found.');
+      }
+    });
   }
 
   // --- Discord button (open external invite) ---
@@ -703,7 +755,9 @@
                 groupId: groupIdInput.value,
                 enableSpoofing: enableSpoofingToggle.checked,
                 autoDetectCookie: autoDetectCookieToggle.checked,
-                spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false
+                spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
+                downloadOnly: downloadOnlyToggle ? downloadOnlyToggle.checked : false,
+                downloadFolder: downloadFolderInput ? downloadFolderInput.value : ''
             };
 
             console.log("Renderer sending data to main:", data);
@@ -712,6 +766,44 @@
     } else {
         if(runSpooferBtn) runSpooferBtn.disabled = true; // Disable if API not found
         console.warn("Run Spoofer button or electronAPI.runSpooferAction not available.");
+    }
+
+    // --- Download Only Toggle Logic ---
+    if (downloadOnlyToggle && downloadFolderGroup && enableSpoofingToggle && groupIdInput) {
+        downloadOnlyToggle.addEventListener('change', () => {
+            if (downloadOnlyToggle.checked) {
+                // Show folder selector
+                downloadFolderGroup.style.display = 'block';
+                // Disable spoofing options
+                enableSpoofingToggle.checked = false;
+                enableSpoofingToggle.disabled = true;
+                groupIdInput.disabled = true;
+                groupIdInput.classList.add('disabled-input');
+            } else {
+                // Hide folder selector
+                downloadFolderGroup.style.display = 'none';
+                // Re-enable spoofing options
+                enableSpoofingToggle.disabled = false;
+                groupIdInput.disabled = false;
+                groupIdInput.classList.remove('disabled-input');
+            }
+        });
+    }
+
+    // --- Folder Selection Button ---
+    if (selectFolderBtn && downloadFolderInput && window.electronAPI && window.electronAPI.selectFolder) {
+        selectFolderBtn.addEventListener('click', async () => {
+            try {
+                const folder = await window.electronAPI.selectFolder();
+                if (folder) {
+                    downloadFolderInput.value = folder;
+                    updateStatus(`Selected folder: ${folder}`);
+                }
+            } catch (err) {
+                console.error('Failed to select folder:', err);
+                updateStatus('Failed to select folder');
+            }
+        });
     }
 
     // --- Enable Text Selection for Inputs ---

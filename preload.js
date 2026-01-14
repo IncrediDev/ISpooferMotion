@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSpooferResult: (callback) => ipcRenderer.on('spoofer-result', (event, ...args) => callback(...args)),
 
   // Fetch audio quota from Roblox API
-  fetchAudioQuota: (cookie, autoDetect) => ipcRenderer.invoke('fetch-audio-quota', { cookie, autoDetect })
+  fetchAudioQuota: (cookie, autoDetect) => ipcRenderer.invoke('fetch-audio-quota', { cookie, autoDetect }),
+
+  // Select folder for download-only mode
+  selectFolder: () => ipcRenderer.invoke('select-folder'),
+
+  // Open logs folder
+  openLogsFolder: () => ipcRenderer.send('open-logs-folder')
   
 });
