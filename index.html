@@ -331,6 +331,40 @@
       color: var(--text-color);
     }
 
+    .tooltip-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      background-color: var(--border-color);
+      color: var(--text-color);
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: help;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .tooltip-icon:hover::after {
+      content: attr(title);
+      position: absolute;
+      bottom: 125%;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #444;
+      color: var(--text-color);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      white-space: nowrap;
+      z-index: 1000;
+      border: 1px solid var(--border-color);
+      pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+
     #run-spoofer-btn:disabled {
         background-color: #303235;
         cursor: not-allowed;
@@ -380,11 +414,33 @@
       <input type="text" id="groupId" name="groupId" placeholder="Leave empty if you dont want to upload to group">
     </div>
 
-    <div class="form-group" id="download-folder-group" style="display: none;">
-      <label for="downloadFolder">Download Folder</label>
-      <div style="display: flex; gap: 8px;">
-        <input type="text" id="downloadFolder" name="downloadFolder" placeholder="Select folder for downloads" readonly>
-        <button id="select-folder-btn" style="padding: 10px 20px; background-color: var(--green-accent); color: var(--text-color); border: none; border-radius: 4px; cursor: pointer; white-space: nowrap;">Browse</button>
+    <button id="advanced-options-btn" style="align-self: flex-start; padding: 6px 12px; background-color: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 12px; margin-bottom: 10px; transition: background-color 0.2s;">⚙️ Advanced Options</button>
+
+    <div id="advanced-options-panel" style="display: none; background-color: var(--input-bg); padding: 12px; border-radius: 4px; margin-bottom: 15px; border: 1px solid var(--border-color);">
+      <div style="display: flex; gap: 15px;">
+        <div class="form-group" style="flex: 1;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
+            <label for="maxPlaceIds" style="margin: 0;">Max Place IDs</label>
+            <span class="tooltip-icon" title="Maximum number of place IDs to fetch (10, 25, or 50). Values are clamped to nearest valid option.">?</span>
+          </div>
+          <input type="number" id="maxPlaceIds" name="maxPlaceIds" value="10" min="10" max="50" style="width: 100%; padding: 8px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
+        </div>
+        <div class="form-group" style="flex: 1;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
+            <label for="maxPlaceIdRetries" style="margin: 0;">Max Retries</label>
+            <span class="tooltip-icon" title="Maximum number of times to retry fetching place IDs if it fails">?</span>
+          </div>
+          <input type="number" id="maxPlaceIdRetries" name="maxPlaceIdRetries" value="3" min="1" max="10" style="width: 100%; padding: 8px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
+        </div>
+      </div>
+      <div style="margin-top: 12px;">
+        <div class="form-group">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
+            <label for="overridePlaceId" style="margin: 0;">Override Place ID</label>
+            <span class="tooltip-icon" title="Leave empty to auto-fetch. Enter a place ID to skip fetching and use this ID directly for all attempts.">?</span>
+          </div>
+          <input type="text" id="overridePlaceId" name="overridePlaceId" placeholder="Leave empty to auto-fetch" style="width: 100%; padding: 8px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
+        </div>
       </div>
     </div>
 
@@ -409,6 +465,14 @@
           <input type="checkbox" id="autoDetectCookie">
           <span class="slider"></span>
         </label>
+      </div>
+    </div>
+
+    <div class="form-group" id="download-folder-group" style="display: none;">
+      <label for="downloadFolder">Download Folder</label>
+      <div style="display: flex; gap: 8px;">
+        <input type="text" id="downloadFolder" name="downloadFolder" placeholder="Select folder for downloads" readonly>
+        <button id="select-folder-btn" style="padding: 10px 20px; background-color: var(--green-accent); color: var(--text-color); border: none; border-radius: 4px; cursor: pointer; white-space: nowrap;">Browse</button>
       </div>
     </div>
 
@@ -459,13 +523,27 @@
     const robloxCookieInput = document.getElementById('robloxCookie');
     const autoDetectCookieToggle = document.getElementById('autoDetectCookie');
     const groupIdInput = document.getElementById('groupId'); // Get reference
+    const maxPlaceIdsInput = document.getElementById('maxPlaceIds'); // Get reference
+    const maxPlaceIdRetriesInput = document.getElementById('maxPlaceIdRetries'); // Get reference
+    const overridePlaceIdInput = document.getElementById('overridePlaceId'); // Get reference
     const enableSpoofingToggle = document.getElementById('enable-spoofing'); // Get reference
     const downloadOnlyToggle = document.getElementById('download-only'); // Get reference
     const downloadFolderGroup = document.getElementById('download-folder-group'); // Get reference
     const downloadFolderInput = document.getElementById('downloadFolder'); // Get reference
     const selectFolderBtn = document.getElementById('select-folder-btn'); // Get reference
     const runSpooferBtn = document.getElementById('run-spoofer-btn'); // Get reference
+    const advancedOptionsBtn = document.getElementById('advanced-options-btn'); // Get reference
+    const advancedOptionsPanel = document.getElementById('advanced-options-panel'); // Get reference
     const statusTextElement = document.getElementById('status-text');
+
+    // --- Advanced Options Toggle ---
+    if (advancedOptionsBtn && advancedOptionsPanel) {
+      advancedOptionsBtn.addEventListener('click', () => {
+        const isHidden = advancedOptionsPanel.style.display === 'none';
+        advancedOptionsPanel.style.display = isHidden ? 'block' : 'none';
+        advancedOptionsBtn.textContent = isHidden ? '⚙️ Advanced Options ▼' : '⚙️ Advanced Options';
+      });
+    }
 
     // --- Status Update Function ---
     function updateStatus(message) {
@@ -753,6 +831,9 @@
                 animationId: animationIdTextarea.value,
                 robloxCookie: robloxCookieInput.value,
                 groupId: groupIdInput.value,
+                maxPlaceIds: parseInt(maxPlaceIdsInput.value) || 10,
+                maxPlaceIdRetries: parseInt(maxPlaceIdRetriesInput.value) || 3,
+                overridePlaceId: overridePlaceIdInput.value.trim() || null,
                 enableSpoofing: enableSpoofingToggle.checked,
                 autoDetectCookie: autoDetectCookieToggle.checked,
                 spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,

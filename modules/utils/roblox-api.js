@@ -101,50 +101,113 @@ async function getCsrfToken(cookie) {
 /**
  * Gets the rootPlace from each game the creator owns
  */
-async function getPlaceIdFromCreator(creatorType, creatorId, cookie) {
-  async function getGames(url) {
+async function getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds = 10) {
+  // Clamp maxPlaceIds to valid Roblox API values: 10, 25, 50
+  const validLimits = [10, 25, 50];
+  let limit = validLimits[0];
+  if (maxPlaceIds >= 50) {
+    limit = 50;
+  } else if (maxPlaceIds >= 25) {
+    limit = 25;
+  } else {
+    limit = 10;
+  }
+
+  async function getGamesPage(url) {
     const resp = await fetch(url, { headers: { Cookie: `.ROBLOSECURITY=${cookie}` } });
     if (!resp.ok) {
       const errorText = await resp.text();
       throw new Error(`Failed to get games (${resp.status}): ${errorText.substring(0, 200)}`);
     }
     const data = await resp.json();
-    if (!data || !data.data || data.data.length === 0) {
-      throw new Error(`No games found in response. Response: ${JSON.stringify(data).substring(0, 200)}`);
+    if (!data || !data.data) {
+      throw new Error(`Invalid response format. Response: ${JSON.stringify(data).substring(0, 200)}`);
     }
-    if (DEVELOPER_MODE) console.log(`Found ${data.data.length} games for ${creatorType} ${creatorId}`);
-    return data.data; // Return all games
+    return data;
   }
 
-  let url;
-  if (creatorType === 'group') {
-    url = `https://games.roblox.com/v2/groups/${creatorId}/games?limit=10`;
-  } else {
-    url = `https://games.roblox.com/v2/users/${creatorId}/games?sortOrder=Asc&limit=10`;
+  let allGames = [];
+  let cursor = null;
+  let pagesRequested = 0;
+
+  // Paginate through results until we have enough place IDs
+  while (allGames.length < maxPlaceIds) {
+    let url;
+    if (creatorType === 'group') {
+      url = `https://games.roblox.com/v2/groups/${creatorId}/games?limit=${limit}`;
+    } else {
+      url = `https://games.roblox.com/v2/users/${creatorId}/games?sortOrder=Asc&limit=${limit}`;
+    }
+
+    if (cursor) {
+      url += `&cursor=${encodeURIComponent(cursor)}`;
+    }
+
+    if (DEVELOPER_MODE) console.log(`(Dev) Fetching games page from URL: ${url}`);
+    const pageData = await getGamesPage(url);
+    
+    if (!pageData.data || pageData.data.length === 0) {
+      if (DEVELOPER_MODE) console.log(`(Dev) No games found on this page. Total collected: ${allGames.length}`);
+      break;
+    }
+
+    allGames = allGames.concat(pageData.data);
+    pagesRequested++;
+    if (DEVELOPER_MODE) {
+      console.log(`(Dev) Page ${pagesRequested}: Got ${pageData.data.length} games (total: ${allGames.length})`);
+      pageData.data.forEach((game, idx) => {
+        if (game.rootPlace) {
+          console.log(`  Game ${idx}: "${game.name}" -> rootPlace ID: ${game.rootPlace.id}`);
+        } else {
+          console.log(`  Game ${idx}: "${game.name}" -> NO rootPlace found (has keys: ${Object.keys(game).join(', ')})`);
+        }
+      });
+    }
+
+    // Check if there's a next page
+    if (!pageData.nextPageCursor) {
+      if (DEVELOPER_MODE) console.log(`(Dev) No more pages available`);
+      break;
+    }
+
+    cursor = pageData.nextPageCursor;
   }
-  
-  if (DEVELOPER_MODE) console.log(`(Dev) Fetching games from URL: ${url}`);
-  const games = await getGames(url);
-  
-  // Extract rootPlace from each game
-  const rootPlaces = games
-    .filter(game => game.rootPlace && game.rootPlace.id)
-    .map(game => game.rootPlace.id);
-  
+
+  // Extract rootPlace from each game (up to maxPlaceIds)
+  const rootPlaces = allGames
+    .slice(0, maxPlaceIds)
+    .map(game => {
+      // Try multiple possible place ID sources
+      if (game.rootPlace && game.rootPlace.id) {
+        return game.rootPlace.id;
+      } else if (game.id) {
+        // Some APIs return the place ID directly as 'id'
+        return game.id;
+      }
+      return null;
+    })
+    .filter(id => id !== null);
+
   if (rootPlaces.length === 0) {
+    if (DEVELOPER_MODE) {
+      console.log(`(Dev) No root places found. Game structure samples:`);
+      allGames.slice(0, 3).forEach((game, idx) => {
+        console.log(`  Game ${idx}:`, JSON.stringify(game, null, 2).substring(0, 200));
+      });
+    }
     throw new Error('No root places found in games');
   }
-  
-  if (DEVELOPER_MODE) console.log(`(Dev) Got ${rootPlaces.length} root places from different games: ${rootPlaces.join(', ')}`);
+
+  if (DEVELOPER_MODE) console.log(`(Dev) Got ${rootPlaces.length} root places from ${pagesRequested} page(s): ${rootPlaces.join(', ')}`);
   return rootPlaces; // Return array of root place IDs from each game
 }
 
 /**
  * Gets multiple place IDs from a creator to use as fallbacks
  */
-async function getMultiplePlaceIds(creatorType, creatorId, cookie) {
+async function getMultiplePlaceIds(creatorType, creatorId, cookie, maxPlaceIds = 10) {
   try {
-    const places = await getPlaceIdFromCreator(creatorType, creatorId, cookie);
+    const places = await getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds);
     return Array.isArray(places) ? places : [places];
   } catch (err) {
     if (DEVELOPER_MODE) console.warn(`(Dev) Failed to get place IDs: ${err.message}`);

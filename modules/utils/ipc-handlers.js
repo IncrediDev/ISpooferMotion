@@ -252,19 +252,32 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
 
   let hasAuthError = false;
 
+  // Get the maxPlaceIds and maxPlaceIdRetries from data, defaults to 10 and 3
+  const maxPlaceIds = data.maxPlaceIds || 10;
+  const maxPlaceIdRetries = data.maxPlaceIdRetries || 3;
+  const overridePlaceId = data.overridePlaceId ? parseInt(data.overridePlaceId) : null;
+
   // Get placeIds for each creator (map creatorId -> array of placeIds)
   const placeIdMap = {};
-  if (animationEntries.length > 0) {
+  if (overridePlaceId) {
+    // If override place ID is provided, use it for all creators
+    if (DEVELOPER_MODE) console.log(`(Dev) Override Place ID provided: ${overridePlaceId}. Using this for all creators instead of fetching.`);
     const uniqueCreators = [...new Set(animationEntries.map(e => `${e.creatorType}:${e.creatorId}`))];
-    if (DEVELOPER_MODE) console.log(`(Dev) Found ${uniqueCreators.length} unique creators. Fetching placeIds...`);
+    for (const creatorKey of uniqueCreators) {
+      placeIdMap[creatorKey] = [overridePlaceId];
+    }
+    if (DEVELOPER_MODE) console.log(`(Dev) Resolved placeIdMap with override:`, placeIdMap);
+  } else if (animationEntries.length > 0) {
+    if (DEVELOPER_MODE) console.log(`(Dev) Found ${animationEntries.length > 0 ? [...new Set(animationEntries.map(e => `${e.creatorType}:${e.creatorId}`))].length : 0} unique creators. Fetching placeIds (max ${maxPlaceIds} per creator, ${maxPlaceIdRetries} retries)...`);
     
+    const uniqueCreators = [...new Set(animationEntries.map(e => `${e.creatorType}:${e.creatorId}`))];
     for (const creatorKey of uniqueCreators) {
       const [creatorType, creatorId] = creatorKey.split(':');
       try {
         if (DEVELOPER_MODE) console.log(`(Dev) Attempting to get placeIds for ${creatorType} ${creatorId}...`);
         const placeIds = await retryAsync(
-          () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie),
-          creatorType === 'group' ? 2 : 3,
+          () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie, maxPlaceIds),
+          maxPlaceIdRetries,
           1000,
           (attempt, max, err) => {
             if (DEVELOPER_MODE) console.warn(`(Dev) Attempt ${attempt}/${max} to get placeIds for ${creatorKey} failed: ${err.message}`);
@@ -314,13 +327,13 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         let placeIdArray = placeIdMap[creatorKey] || [99840799534728];
         let placeIdIndex = 0;
         let retryCount = 0;
-        const maxRetries = 5;
+        const maxRetries = maxPlaceIdRetries;
         
-        while (retryCount <= maxRetries && placeIdIndex < placeIdArray.length) {
+        while (placeIdIndex < placeIdArray.length) {
           const placeId = placeIdArray[placeIdIndex];
           const itemsWithoutCreator = items.map(({ creatorType, creatorId, ...rest }) => rest);
           
-          if (DEVELOPER_MODE) console.log(`(Dev) Batch request for ${creatorKey}: ${items.length} items with placeId ${placeId}${retryCount > 0 ? ` (retry ${retryCount}/${maxRetries})` : ''}${placeIdIndex > 0 ? ` (place index ${placeIdIndex}/${placeIdArray.length})` : ''}`);
+          if (DEVELOPER_MODE) console.log(`(Dev) Batch request for ${creatorKey}: ${items.length} items with placeId ${placeId}${placeIdIndex > 0 ? ` (place index ${placeIdIndex}/${placeIdArray.length})` : ''}`);
           
           const batchResp = await fetch('https://assetdelivery.roblox.com/v2/assets/batch', {
             method: 'POST',
@@ -328,6 +341,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
               'User-Agent': 'RobloxStudio/WinInet',
               'Content-Type': 'application/json',
               'Cookie': `.ROBLOSECURITY=${robloxCookie}`,
+              'Roblox-Place-Id': String(placeId),
             },
             body: JSON.stringify(itemsWithoutCreator),
           });
@@ -337,44 +351,65 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
           
           // Check if response contains batch errors (403s for restricted assets)
           const hasBatchErrors = locations.some(loc => loc.errors && loc.errors.length > 0 && loc.errors[0].code === 403);
+
+          // Print detailed batch errors for visibility
+          const errorItems = locations.filter(loc => loc.errors && loc.errors.length > 0);
+          if (errorItems.length > 0) {
+            for (const locErr of errorItems) {
+              const firstErr = locErr.errors[0] || {};
+              const errMsg = firstErr.Message || firstErr.message || JSON.stringify(firstErr);
+              console.warn(`Batch error for ${locErr.requestId} at place ${placeId}:`, firstErr);
+              if (DEVELOPER_MODE) console.log('(Dev) Full batch item with error:', JSON.stringify(locErr, null, 2).substring(0, 500));
+            }
+          }
           
           if (hasBatchErrors) {
             if (placeIdIndex < placeIdArray.length - 1) {
               // Try next place ID
               if (DEVELOPER_MODE) console.log(`(Dev) Batch errors detected for ${creatorKey} with placeId ${placeId}. Trying next place...`);
               placeIdIndex++;
-              retryCount++;
               continue;
-            } else if (retryCount < maxRetries) {
-              // Try to get fresh place IDs
-              if (DEVELOPER_MODE) console.log(`(Dev) All places exhausted for ${creatorKey}. Fetching fresh placeIds and retrying...`);
-              try {
-                const freshPlaceIds = await retryAsync(
-                  () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie),
-                  1,
-                  1000
-                );
-                placeIdMap[creatorKey] = Array.isArray(freshPlaceIds) ? freshPlaceIds : [freshPlaceIds];
-                placeIdArray = placeIdMap[creatorKey];
-                placeIdIndex = 0;
-                if (DEVELOPER_MODE) console.log(`(Dev) Got fresh placeIds for ${creatorKey}: ${placeIdArray.join(', ')}`);
-                retryCount++;
-                continue;
-              } catch (refreshErr) {
-                if (DEVELOPER_MODE) console.warn(`(Dev) Failed to refresh placeIds for ${creatorKey}: ${refreshErr.message}`);
-                // Accept the errors and continue
+            } else {
+              // All places exhausted
+              // If an override is set, do NOT fetch fresh place IDs; accept errors
+              if (overridePlaceId) {
+                if (DEVELOPER_MODE) console.log(`(Dev) Override Place ID in use for ${creatorKey}. Skipping fresh placeId fetch and accepting batch errors.`);
                 for (const loc of locations) {
                   locationsMap[loc.requestId] = loc;
                 }
                 break;
               }
-            } else {
-              // Max retries reached, accept the errors
-              if (DEVELOPER_MODE) console.log(`(Dev) Max retries reached for ${creatorKey}, accepting batch errors`);
-              for (const loc of locations) {
-                locationsMap[loc.requestId] = loc;
+              // Otherwise, try to get fresh place IDs with retries
+              if (retryCount < maxRetries) {
+                retryCount++;
+                if (DEVELOPER_MODE) console.log(`(Dev) All places exhausted for ${creatorKey}. Fetching fresh placeIds (retry ${retryCount}/${maxRetries})...`);
+                try {
+                  const freshPlaceIds = await retryAsync(
+                    () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie, maxPlaceIds),
+                    1,
+                    1000
+                  );
+                  placeIdMap[creatorKey] = Array.isArray(freshPlaceIds) ? freshPlaceIds : [freshPlaceIds];
+                  placeIdArray = placeIdMap[creatorKey];
+                  placeIdIndex = 0;
+                  if (DEVELOPER_MODE) console.log(`(Dev) Got fresh placeIds for ${creatorKey}: ${placeIdArray.join(', ')}`);
+                  continue;
+                } catch (refreshErr) {
+                  if (DEVELOPER_MODE) console.warn(`(Dev) Failed to refresh placeIds for ${creatorKey}: ${refreshErr.message}`);
+                  // Accept the errors and continue
+                  for (const loc of locations) {
+                    locationsMap[loc.requestId] = loc;
+                  }
+                  break;
+                }
+              } else {
+                // Max retries reached, accept the errors
+                if (DEVELOPER_MODE) console.log(`(Dev) Max retries reached for ${creatorKey}, accepting batch errors`);
+                for (const loc of locations) {
+                  locationsMap[loc.requestId] = loc;
+                }
+                break;
               }
-              break;
             }
           } else {
             // Success - no errors
@@ -403,6 +438,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   // Parallel downloads
   sendStatusMessage('Downloading animations...');
   let downloadCompleted = 0;
+  const downloadStartTime = Date.now();
   const downloadPromises = animationEntries.map(async (entry) => {
     const loc = locationsMap[entry.id];
     if (!loc) return { entry, success: false, error: 'No location in batch response' };
@@ -426,7 +462,14 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     const entryPlaceId = Array.isArray(entryPlaceIds) ? entryPlaceIds[0] : entryPlaceIds;
     const result = await downloadAnimationAssetWithProgress(url, robloxCookie, filePath, downloadTransferId, entry.name, entry.id, sendTransferUpdate, entryPlaceId);
     downloadCompleted++;
-    sendStatusMessage(`Downloaded ${downloadCompleted}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'}`);
+    const elapsed = (Date.now() - downloadStartTime) / 1000;
+    const avgTimePerItem = elapsed / downloadCompleted;
+    const remaining = animationEntries.length - downloadCompleted;
+    const etaSeconds = Math.ceil(avgTimePerItem * remaining);
+    const etaMin = Math.floor(etaSeconds / 60);
+    const etaSec = etaSeconds % 60;
+    const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
+    sendStatusMessage(`Downloaded ${downloadCompleted}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`);
     return { entry, filePath: result.success ? filePath : null, success: result.success, error: result.error };
   });
   const downloadResults = await Promise.all(downloadPromises);
@@ -439,6 +482,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   } else {
     sendStatusMessage(`Uploading ${isSoundMode ? 'sounds' : 'animations'}...`);
     let uploadCompleted = 0;
+    const uploadStartTime = Date.now();
     const successfulDownloads = downloadResults.filter((r) => r.success);
     const uploadPromises = successfulDownloads.map(async (downloadResult) => {
     const entry = downloadResult.entry;
@@ -466,12 +510,26 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);
       uploadCompleted++;
-      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}`);
+      const elapsed = (Date.now() - uploadStartTime) / 1000;
+      const avgTimePerItem = elapsed / uploadCompleted;
+      const remaining = successfulDownloads.length - uploadCompleted;
+      const etaSeconds = Math.ceil(avgTimePerItem * remaining);
+      const etaMin = Math.floor(etaSeconds / 60);
+      const etaSec = etaSeconds % 60;
+      const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
+      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`);
       return { entry, success: uploadResult.success, assetId: uploadResult.assetId, error: uploadResult.error };
     } catch (finalRetryError) {
       sendTransferUpdate({ id: uploadTransferId, status: 'error', error: `All upload attempts failed: ${finalRetryError.message}` });
       uploadCompleted++;
-      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}`);
+      const elapsed = (Date.now() - uploadStartTime) / 1000;
+      const avgTimePerItem = elapsed / uploadCompleted;
+      const remaining = successfulDownloads.length - uploadCompleted;
+      const etaSeconds = Math.ceil(avgTimePerItem * remaining);
+      const etaMin = Math.floor(etaSeconds / 60);
+      const etaSec = etaSeconds % 60;
+      const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
+      sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`);
       return { entry, success: false, error: finalRetryError.message };
     }
   });
@@ -526,6 +584,39 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     if (DEVELOPER_MODE) console.warn('(Dev) Failed to send final status message', e);
   }
 
+  // Build concise run summary (counts, failures)
+  const downloadFailures = downloadResults
+    .filter(r => !r.success)
+    .map(r => ({ id: r.entry.id, name: r.entry.name, reason: r.error || 'Unknown error' }));
+  const uploadFailures = data.downloadOnly
+    ? []
+    : (uploadResults || [])
+        .filter(u => !u.success)
+        .map(u => ({ id: u.entry.id, name: u.entry.name, reason: u.error || 'Unknown error' }));
+  const skippedUploadsCount = data.downloadOnly ? 0 : downloadFailures.length;
+
+  const listFailures = (label, items) => {
+    if (!items || items.length === 0) return '';
+    const maxItems = 5;
+    const lines = items.slice(0, maxItems).map(it => `- ${it.name} (ID: ${it.id}) — ${it.reason}`);
+    const remaining = items.length - maxItems;
+    return `${label}:\n${lines.join('\n')}${remaining > 0 ? `\n(+${remaining} more…)` : ''}\n`;
+  };
+
+  let runSummary = `\n--- Summary ---\n` +
+    `Mode: ${data.downloadOnly ? 'Download-Only' : 'Download + Upload'}\n` +
+    `Total ${isSoundMode ? 'sounds' : 'animations'}: ${animationEntries.length}\n` +
+    `Downloaded: ${downloadedSuccessfullyCount}/${animationEntries.length}${downloadFailures.length ? ` (Failed: ${downloadFailures.length})` : ''}\n` +
+    (!data.downloadOnly ? `Uploaded: ${successfulUploadCount}/${downloadResults.filter(r=>r.success).length}${uploadFailures.length ? ` (Failed: ${uploadFailures.length}, Skipped: ${skippedUploadsCount})` : (skippedUploadsCount ? ` (Skipped: ${skippedUploadsCount})` : '')}\n` : '');
+
+  // Add top failure details (bounded) for quick inspection
+  if (downloadFailures.length) {
+    runSummary += `\n` + listFailures('Download failures', downloadFailures);
+  }
+  if (!data.downloadOnly && uploadFailures.length) {
+    runSummary += `\n` + listFailures('Upload failures', uploadFailures);
+  }
+
   // Output with mappings only (or download summary for download-only mode)
   let finalOutput = '';
   if (data.downloadOnly) {
@@ -548,11 +639,20 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     } else if (downloadedSuccessfullyCount > 0 && !csrfToken) {
       finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}). Uploads skipped (CSRF token missing).`;
     } else if (animationEntries.length > 0) {
-      finalOutput = hasAuthError ? 'Authentication failed. Please check your Roblox cookie.' : `No ${isSoundMode ? 'sounds' : 'animations'} were successfully processed to provide mappings.`;
+      finalOutput = (hasAuthError ? 'Authentication failed. Please check your Roblox cookie.' : `No ${isSoundMode ? 'sounds' : 'animations'} were successfully processed to provide mappings.`);
     } else {
       finalOutput = 'No operations performed.';
     }
   }
+
+  // Print final summary to console for quick inspection
+  try {
+    if (DEVELOPER_MODE) {
+      console.log('(Dev) Run Summary:\n' + runSummary);
+    } else {
+      console.log('Run Summary:\n' + runSummary);
+    }
+  } catch {}
 
   sendSpooferResultToRenderer({ output: finalOutput, success: downloadedSuccessfullyCount > 0 || successfulUploadCount > 0 });
 
