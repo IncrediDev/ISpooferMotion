@@ -7,7 +7,7 @@ const { DEVELOPER_MODE } = require('./common');
 /**
  * Downloads an animation asset with progress reporting
  */
-async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, transferId, entryName, originalAssetId, sendTransferUpdate, placeId = null) {
+async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, transferId, entryName, originalAssetId, sendTransferUpdate, placeId = null, options = {}) {
   sendTransferUpdate({ id: transferId, name: entryName, originalAssetId: originalAssetId, status: 'processing', direction: 'download', progress: 0, error: null, size: 0 });
   if (DEVELOPER_MODE) {
     console.log(`[DOWNLOAD DEBUG] Starting download for "${entryName}" (Asset ID: ${originalAssetId})`);
@@ -15,22 +15,34 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
     console.log(`[DOWNLOAD DEBUG] PlaceId: ${placeId || 'not provided'}`);
     console.log(`[DOWNLOAD DEBUG] Target file: ${filePath}`);
   }
-  try {
-    const response = await fetch(url, { headers: { Cookie: `.ROBLOSECURITY=${robloxCookie}` }, redirect: 'follow' });
+  // Track progress across try/catch to avoid ReferenceError
+  const timeoutMs = typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : 15000;
+  const retries = typeof options.retries === 'number' && options.retries > 0 ? options.retries : 2;
+  const retryDelayMs = typeof options.retryDelayMs === 'number' && options.retryDelayMs > 0 ? options.retryDelayMs : 2000;
+  let lastReportedProgress = 0;
+  let fileStream = null;
+  let attemptError = null;
+
+  for (let attempt = 1; attempt <= (retries + 1); attempt++) {
+    attemptError = null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await fetch(url, { headers: { Cookie: `.ROBLOSECURITY=${robloxCookie}` }, redirect: 'follow', signal: controller.signal });
+      clearTimeout(timer);
     if (!response.ok) {
       const errorDetail = DEVELOPER_MODE 
         ? `Failed to download asset: ${response.status} ${response.statusText} | Asset ID: ${originalAssetId} | PlaceId: ${placeId || 'N/A'} | URL: ${url}` 
         : `Failed to download asset: ${response.status} ${response.statusText}`;
-      throw new Error(errorDetail);
+        throw new Error(errorDetail);
     }
     if (!response.body) throw new Error(`No response body for asset (ID: ${originalAssetId})`);
     const totalSize = Number(response.headers.get('content-length'));
     if (DEVELOPER_MODE) console.log(`[DOWNLOAD DEBUG] Content-Length: ${totalSize} bytes`);
     sendTransferUpdate({ id: transferId, size: isNaN(totalSize) ? 0 : totalSize });
     const reader = response.body.getReader();
-    const fileStream = fsSync.createWriteStream(filePath);
+    fileStream = fsSync.createWriteStream(filePath);
     let receivedLength = 0;
-    let lastReportedProgress = -1;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -53,13 +65,29 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
     sendTransferUpdate({ id: transferId, status: 'completed', progress: 100 });
     if (DEVELOPER_MODE) console.log(`[DOWNLOAD DEBUG] Successfully downloaded "${entryName}" (${receivedLength} bytes)`);
     return { success: true, filePath };
-  } catch (error) {
-    const errorMsg = DEVELOPER_MODE 
-      ? `[DOWNLOAD ERROR] "${entryName}" (Asset ID: ${originalAssetId}, PlaceId: ${placeId || 'N/A'}): ${error.message}`
-      : `Download error for ${entryName}: ${error.message}`;
-    console.error(errorMsg);
-    sendTransferUpdate({ id: transferId, status: 'error', error: error.message, progress: lastReportedProgress >= 0 ? lastReportedProgress : 0 });
-    return { success: false, error: error.message };
+    } catch (error) {
+      attemptError = error;
+      const msg = error && error.message ? error.message : 'unknown error';
+      const isTimeout = error && (error.name === 'AbortError' || /aborted|timeout/i.test(msg));
+      const shouldRetry = isTimeout || /\b5\d\d\b/.test(msg) || /Failed to download asset: (500|502|503|504)/.test(msg);
+      // Ensure stream is closed on error
+      try { if (fileStream) fileStream.end(); } catch {}
+      // Remove partial file if exists
+      try { if (fsSync.existsSync(filePath)) fsSync.unlinkSync(filePath); } catch {}
+      if (DEVELOPER_MODE) console.warn(`[DOWNLOAD DEBUG] Attempt ${attempt}/${retries + 1} for "${entryName}" failed (${isTimeout ? 'timeout' : 'error'}): ${msg}${shouldRetry && attempt <= retries ? ' -> retrying' : ''}`);
+      if (!shouldRetry || attempt > retries) {
+        const errorMsg = DEVELOPER_MODE 
+          ? `[DOWNLOAD ERROR] "${entryName}" (Asset ID: ${originalAssetId}, PlaceId: ${placeId || 'N/A'}): ${msg}`
+          : `Download error for ${entryName}: ${msg}`;
+        console.error(errorMsg);
+        sendTransferUpdate({ id: transferId, status: 'error', error: msg, progress: lastReportedProgress || 0 });
+        return { success: false, error: msg };
+      }
+      // Backoff with jitter
+      const jitter = Math.floor(Math.random() * 300);
+      await new Promise(r => setTimeout(r, retryDelayMs + jitter));
+      continue;
+    }
   }
 }
 
@@ -146,7 +174,15 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
       });
       const responseData = await response.json();
       if (!response.ok) {
-        throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
+        // Detect rate limit (429) or server errors for clearer messaging
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('retry-after') || 'unknown';
+          throw new Error(`Rate limit exceeded (429). Retry-After: ${retryAfter}s. Response: ${JSON.stringify(responseData)}`);
+        } else if (response.status >= 500) {
+          throw new Error(`Server error (${response.status}). Response: ${JSON.stringify(responseData)}`);
+        } else {
+          throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
+        }
       }
       const newAssetId = responseData.Id || responseData.id || responseData.assetId;
       if (newAssetId) {
@@ -157,7 +193,10 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
       }
     } catch (err) {
       const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
-      console.error(`[UPLOAD ERROR - FETCH] ${assetTypeName} upload failed: ${errorMsg}`, err.cause || err);
+      const isRateLimit = errorMsg.includes('429') || errorMsg.includes('Rate limit');
+      if (DEVELOPER_MODE || isRateLimit) {
+        console.error(`[UPLOAD ERROR - FETCH] ${assetTypeName} upload failed${isRateLimit ? ' (RATE LIMIT)' : ''}: ${errorMsg}`, err.cause || err);
+      }
       sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
       return { success: false, error: errorMsg };
     }

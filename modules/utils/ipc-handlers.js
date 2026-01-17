@@ -307,7 +307,11 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     creatorType: entry.creatorType,
     creatorId: entry.creatorId,
   }));
-  const chunkSize = 50;
+  // Batch behavior controls (allow overrides via incoming data)
+  const BATCH_MAX_RETRIES = parseInt(data.batchRetries, 10) || 3;
+  const BATCH_RETRY_DELAY_MS = parseInt(data.batchRetryDelay, 10) || 2000;
+  const BATCH_TIMEOUT_MS = parseInt(data.batchTimeoutMs, 10) || 15000; // 15s per batch
+  const chunkSize = parseInt(data.batchChunkSize, 10) || 20; // Reduce from 50 to 20 by default to mitigate 504s
 
   if (DEVELOPER_MODE) console.log(`(Dev) Fetching batch locations for ${batchItems.length} ${isSoundMode ? 'sounds' : 'animations'} with creator-specific placeIds`);
   for (let i = 0; i < batchItems.length; i += chunkSize) {
@@ -335,18 +339,53 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
           
           if (DEVELOPER_MODE) console.log(`(Dev) Batch request for ${creatorKey}: ${items.length} items with placeId ${placeId}${placeIdIndex > 0 ? ` (place index ${placeIdIndex}/${placeIdArray.length})` : ''}`);
           
-          const batchResp = await fetch('https://assetdelivery.roblox.com/v2/assets/batch', {
-            method: 'POST',
-            headers: {
-              'User-Agent': 'RobloxStudio/WinInet',
-              'Content-Type': 'application/json',
-              'Cookie': `.ROBLOSECURITY=${robloxCookie}`,
-              'Roblox-Place-Id': String(placeId),
-            },
-            body: JSON.stringify(itemsWithoutCreator),
-          });
-          if (!batchResp.ok) throw new Error(`Batch request failed for ${creatorKey}: ${batchResp.status}`);
-          const locations = await batchResp.json();
+          // Batch fetch with retry + timeout (retry on 429/5xx/504/timeout)
+          let locations;
+          for (let attempt = 1; attempt <= BATCH_MAX_RETRIES; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
+            let resp;
+            let caughtErr = null;
+            try {
+              resp = await fetch('https://assetdelivery.roblox.com/v2/assets/batch', {
+                method: 'POST',
+                headers: {
+                  'User-Agent': 'RobloxStudio/WinInet',
+                  'Content-Type': 'application/json',
+                  'Cookie': `.ROBLOSECURITY=${robloxCookie}`,
+                  'Roblox-Place-Id': String(placeId),
+                },
+                body: JSON.stringify(itemsWithoutCreator),
+                signal: controller.signal,
+              });
+            } catch (err) {
+              caughtErr = err;
+            } finally {
+              clearTimeout(timeout);
+            }
+
+            if (resp && resp.ok) {
+              locations = await resp.json();
+              break;
+            }
+
+            // Decide if retryable
+            const status = resp ? resp.status : 0;
+            const isTimeout = caughtErr && (caughtErr.name === 'AbortError' || /aborted|timeout/i.test(caughtErr.message));
+            const retryable = isTimeout || status === 429 || status === 502 || status === 503 || status === 504 || status === 500;
+            const statusText = resp ? `${status}` : (isTimeout ? 'timeout' : (caughtErr ? caughtErr.message : 'unknown'));
+            if (DEVELOPER_MODE) console.warn(`(Dev) Batch attempt ${attempt}/${BATCH_MAX_RETRIES} for ${creatorKey} @ place ${placeId} failed: ${statusText}${retryable && attempt < BATCH_MAX_RETRIES ? ' -> retrying' : ''}`);
+
+            if (!retryable || attempt === BATCH_MAX_RETRIES) {
+              throw new Error(`Batch request failed for ${creatorKey}: ${statusText}`);
+            }
+
+            // Backoff with basic jitter
+            const jitter = Math.floor(Math.random() * 300);
+            await new Promise(r => setTimeout(r, BATCH_RETRY_DELAY_MS + jitter));
+          }
+
+          if (!locations) throw new Error(`Batch request failed for ${creatorKey}: no response`);
           if (DEVELOPER_MODE) console.log(`(Dev) Batch response for ${creatorKey}:`, locations);
           
           // Check if response contains batch errors (403s for restricted assets)
@@ -423,7 +462,11 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
       }
     } catch (error) {
       console.error('Batch request error:', error);
-      hasAuthError = true;
+      // Consider only 401/403 as auth errors; 5xx/504/timeout are not auth
+      const msg = (error && error.message) ? error.message : '';
+      if (/\b401\b|\b403\b/.test(msg)) {
+        hasAuthError = true;
+      }
       sendStatusMessage(`Batch request failed: ${error.message}`);
       for (const item of chunk) {
         const transfer = initialTransferStates.find((t) => t.originalAssetId === item.requestId);
@@ -434,6 +477,10 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
 
   const UPLOAD_RETRIES = parseInt(data.uploadRetries, 10) || 3;
   const UPLOAD_RETRY_DELAY_MS = parseInt(data.uploadRetryDelay, 10) || 5000;
+  // Download controls (optional overrides via data)
+  const DOWNLOAD_RETRIES = parseInt(data.downloadRetries, 10) || 2;
+  const DOWNLOAD_RETRY_DELAY_MS = parseInt(data.downloadRetryDelayMs, 10) || 2000;
+  const DOWNLOAD_TIMEOUT_MS = parseInt(data.downloadTimeoutMs, 10) || 15000;
 
   // Parallel downloads
   sendStatusMessage('Downloading animations...');
@@ -460,7 +507,17 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     const creatorKey = `${entry.creatorType}:${entry.creatorId}`;
     const entryPlaceIds = placeIdMap[creatorKey] || [99840799534728];
     const entryPlaceId = Array.isArray(entryPlaceIds) ? entryPlaceIds[0] : entryPlaceIds;
-    const result = await downloadAnimationAssetWithProgress(url, robloxCookie, filePath, downloadTransferId, entry.name, entry.id, sendTransferUpdate, entryPlaceId);
+    const result = await downloadAnimationAssetWithProgress(
+      url,
+      robloxCookie,
+      filePath,
+      downloadTransferId,
+      entry.name,
+      entry.id,
+      sendTransferUpdate,
+      entryPlaceId,
+      { timeoutMs: DOWNLOAD_TIMEOUT_MS, retries: DOWNLOAD_RETRIES, retryDelayMs: DOWNLOAD_RETRY_DELAY_MS }
+    );
     downloadCompleted++;
     const elapsed = (Date.now() - downloadStartTime) / 1000;
     const avgTimePerItem = elapsed / downloadCompleted;
@@ -499,10 +556,18 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
       size: fileSize,
     });
     const onRetryAttempt = (attempt, maxAttempts, err) => {
+      const errMsg = err.message || '';
+      const isRateLimit = errMsg.includes('429') || errMsg.includes('Rate limit');
+      const logMsg = isRateLimit 
+        ? `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} rate-limited (429). Retrying with delay...`
+        : `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} failed. Retrying...`;
+      if (DEVELOPER_MODE && isRateLimit) {
+        console.warn(`(Dev) [RATE LIMIT DETECTED] ${entry.name}: ${errMsg}`);
+      }
       sendTransferUpdate({
         id: uploadTransferId,
         status: 'processing',
-        message: `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} failed. Retrying...`,
+        message: logMsg,
         error: err.message.substring(0, 120),
       });
     };
@@ -593,6 +658,12 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     : (uploadResults || [])
         .filter(u => !u.success)
         .map(u => ({ id: u.entry.id, name: u.entry.name, reason: u.error || 'Unknown error' }));
+  
+  // Detect rate-limit failures
+  const rateLimitFailures = uploadFailures.filter(f => 
+    (f.reason || '').includes('429') || (f.reason || '').includes('Rate limit')
+  );
+  
   const skippedUploadsCount = data.downloadOnly ? 0 : downloadFailures.length;
 
   const listFailures = (label, items) => {
@@ -615,6 +686,14 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   }
   if (!data.downloadOnly && uploadFailures.length) {
     runSummary += `\n` + listFailures('Upload failures', uploadFailures);
+  }
+  
+  // Add rate-limit guidance if detected
+  if (rateLimitFailures.length > 0) {
+    const suggestedDelay = Math.min(Math.max(UPLOAD_RETRY_DELAY_MS * 2, 10000), 60000);
+    runSummary += `\n⚠️ RATE LIMIT DETECTED (429): ${rateLimitFailures.length} upload(s) hit rate limits.\n`;
+    runSummary += `   Recommendation: Try again with higher "Retry Delay" (current: ${UPLOAD_RETRY_DELAY_MS}ms, suggested: ${suggestedDelay}ms)\n`;
+    runSummary += `   Or increase "Upload Retries" for more attempts.\n`;
   }
 
   // Output with mappings only (or download summary for download-only mode)

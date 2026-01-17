@@ -442,6 +442,24 @@
           <input type="text" id="overridePlaceId" name="overridePlaceId" placeholder="Leave empty to auto-fetch" style="width: 100%; padding: 8px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
         </div>
       </div>
+      <div style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+        <div style="display: flex; gap: 15px;">
+          <div class="form-group" style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
+              <label for="uploadRetries" style="margin: 0;">Upload Retries</label>
+              <span class="tooltip-icon" title="Number of times to retry failed uploads. Useful for rate limiting.">?</span>
+            </div>
+            <input type="number" id="uploadRetries" name="uploadRetries" value="3" min="1" max="10" style="width: 100%; padding: 8px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
+          </div>
+          <div class="form-group" style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
+              <label for="uploadRetryDelay" style="margin: 0;">Retry Delay (ms)</label>
+              <span class="tooltip-icon" title="Milliseconds to wait between upload retry attempts (e.g., 5000 = 5 seconds).">?</span>
+            </div>
+            <input type="number" id="uploadRetryDelay" name="uploadRetryDelay" value="5000" min="1000" max="60000" step="1000" style="width: 100%; padding: 8px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="toggles-container">
@@ -534,6 +552,8 @@
     const runSpooferBtn = document.getElementById('run-spoofer-btn'); // Get reference
     const advancedOptionsBtn = document.getElementById('advanced-options-btn'); // Get reference
     const advancedOptionsPanel = document.getElementById('advanced-options-panel'); // Get reference
+    const uploadRetriesInput = document.getElementById('uploadRetries'); // Get reference
+    const uploadRetryDelayInput = document.getElementById('uploadRetryDelay'); // Get reference
     const statusTextElement = document.getElementById('status-text');
 
     // --- Advanced Options Toggle ---
@@ -834,6 +854,8 @@
                 maxPlaceIds: parseInt(maxPlaceIdsInput.value) || 10,
                 maxPlaceIdRetries: parseInt(maxPlaceIdRetriesInput.value) || 3,
                 overridePlaceId: overridePlaceIdInput.value.trim() || null,
+                uploadRetries: parseInt(uploadRetriesInput ? uploadRetriesInput.value : 3) || 3,
+                uploadRetryDelay: parseInt(uploadRetryDelayInput ? uploadRetryDelayInput.value : 5000) || 5000,
                 enableSpoofing: enableSpoofingToggle.checked,
                 autoDetectCookie: autoDetectCookieToggle.checked,
                 spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
