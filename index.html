@@ -399,7 +399,7 @@
     <div class="form-group">
       <label for="animationId" id="assetIdLabel">Animation Id Input</label>
       <div class="input-with-button-container">
-        <textarea id="animationId" name="animationId" rows="3" class="input-box" placeholder="Enter or paste Animation ID"></textarea>
+        <textarea id="animationId" name="animationId" rows="3" class="input-box" placeholder="Format: [123456][Name][User123] (or Group123) per line"></textarea>
         <button id="paste-animationId-btn" class="input-action-btn" title="Paste Animation ID">📥</button>
       </div>
     </div>
@@ -530,6 +530,7 @@
 
   
   <script>
+    const DEVELOPER_MODE = false;
     // --- Element Selectors ---
     const closeBtn = document.getElementById('close-btn');
     const copyOutputBtn = document.getElementById('copy-output-btn');
@@ -815,7 +816,7 @@
         spoofSoundsToggle.addEventListener('change', async () => {
             if (spoofSoundsToggle.checked) {
                 assetIdLabel.textContent = 'Sound Id Input';
-                animationIdTextarea.placeholder = 'Enter or paste Sound ID';
+                animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Sound ID';
                 
                 // Fetch audio quota
@@ -825,7 +826,7 @@
                 updateAudioQuotaDisplay();
             } else {
                 assetIdLabel.textContent = 'Animation Id Input';
-                animationIdTextarea.placeholder = 'Enter or paste Animation ID';
+                animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Animation ID';
                 audioQuotaInfo.style.display = 'none';
             }

@@ -123,7 +123,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     console.log('MAIN_PROCESS: Received run-spoofer-action.');
   }
 
-  const downloadsDir = data.downloadOnly && data.downloadFolder && data.downloadFolder.trim()
+  const hasCustomDownloadFolder = !!(data.downloadOnly && data.downloadFolder && data.downloadFolder.trim());
+  const downloadsDir = hasCustomDownloadFolder
     ? data.downloadFolder.trim()
     : path.join(app.getPath('userData'), 'ispoofer_downloads');
 
@@ -134,10 +135,14 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     return;
   }
 
-  const cleared = await clearDownloadsDirectory(downloadsDir);
-  if (!cleared) {
-    if (DEVELOPER_MODE) console.warn('(Dev) Failed to fully clear downloads directory, proceeding anyway.');
-    sendSpooferResultToRenderer({ output: 'Warning: Could not fully clear previous downloads.', success: false });
+  if (!hasCustomDownloadFolder) {
+    const cleared = await clearDownloadsDirectory(downloadsDir);
+    if (!cleared) {
+      if (DEVELOPER_MODE) console.warn('(Dev) Failed to fully clear downloads directory, proceeding anyway.');
+      sendSpooferResultToRenderer({ output: 'Warning: Could not fully clear previous downloads.', success: false });
+    }
+  } else if (DEVELOPER_MODE) {
+    console.log('(Dev) Skipping auto-clear: using user-selected download folder', downloadsDir);
   }
 
   if (!data.enableSpoofing && !data.downloadOnly) {
