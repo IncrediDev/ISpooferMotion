@@ -8,11 +8,16 @@ let mainWindow;
  * Creates the main application window
  */
 function createWindow() {
+  // Use appropriate icon format for each platform
+  const iconPath = process.platform === 'win32' 
+    ? path.join(__dirname, '..', 'assets', 'app_icon.ico')
+    : path.join(__dirname, '..', 'assets', 'app_icon.png');
+  
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 800,
     title: 'ISpooferMotion',
-    icon: path.join(__dirname, '..', 'assets', 'app_icon.ico'),
+    icon: iconPath,
     frame: false,
     resizable: false,
     webPreferences: {

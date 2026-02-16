@@ -1,6 +1,6 @@
 {
   "name": "ispoofermotion",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "main": "main.js",
   "description": "Animation spoofing utility for Roblox",
   "author": "IncredibroXP",
@@ -35,7 +35,30 @@
       "icon": "assets/app_icon.ico"
     },
     "mac": {
-      "target": "dmg"
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/app_icon.png",
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   }
 }
