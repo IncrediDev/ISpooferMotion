@@ -4,7 +4,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const keytar = require('keytar');
 const fs = require('fs').promises;
-const { DEVELOPER_MODE } = require('./common');
+const { DEVELOPER_MODE, buildRobloxCookieHeader } = require('./common');
 
 /**
  * Retrieves Roblox cookie from Roblox Studio or Windows Credential Manager
@@ -76,7 +76,11 @@ async function getCookieFromRobloxStudio(userId = null) {
  */
 async function getCsrfToken(cookie) {
   const csrfUrl = 'https://auth.roblox.com/v2/logout';
-  const csrfHeaders = { 'Cookie': `.ROBLOSECURITY=${cookie}`, 'Content-Type': 'application/json' };
+  const cookieHeader = buildRobloxCookieHeader(cookie);
+  if (!cookieHeader) {
+    throw new Error('Missing or invalid ROBLOSECURITY cookie');
+  }
+  const csrfHeaders = { 'Cookie': cookieHeader, 'Content-Type': 'application/json' };
   let response;
   try {
     response = await fetch(csrfUrl, { method: 'POST', headers: csrfHeaders, body: JSON.stringify({}) });
@@ -114,7 +118,11 @@ async function getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds
   }
 
   async function getGamesPage(url) {
-    const resp = await fetch(url, { headers: { Cookie: `.ROBLOSECURITY=${cookie}` } });
+    const cookieHeader = buildRobloxCookieHeader(cookie);
+    if (!cookieHeader) {
+      throw new Error('Missing or invalid ROBLOSECURITY cookie');
+    }
+    const resp = await fetch(url, { headers: { Cookie: cookieHeader } });
     if (!resp.ok) {
       const errorText = await resp.text();
       throw new Error(`Failed to get games (${resp.status}): ${errorText.substring(0, 200)}`);
@@ -215,9 +223,27 @@ async function getMultiplePlaceIds(creatorType, creatorId, cookie, maxPlaceIds =
   }
 }
 
+/**
+ * Gets the authenticated user's ID from the Roblox API using their cookie
+ */
+async function getAuthenticatedUserId(cookie) {
+  const cookieHeader = buildRobloxCookieHeader(cookie);
+  if (!cookieHeader) throw new Error('Missing or invalid ROBLOSECURITY cookie');
+  const response = await fetch('https://users.roblox.com/v1/users/authenticated', {
+    headers: { 'Cookie': cookieHeader, 'User-Agent': 'RobloxStudio/WinInet' }
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get authenticated user ID (${response.status})`);
+  }
+  const data = await response.json();
+  if (!data.id) throw new Error('No user ID in authenticated user response');
+  return String(data.id);
+}
+
 module.exports = {
   getCookieFromRobloxStudio,
   getCsrfToken,
   getPlaceIdFromCreator,
   getMultiplePlaceIds,
+  getAuthenticatedUserId,
 };

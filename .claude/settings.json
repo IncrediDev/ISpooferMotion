@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:devforum.roblox.com)",
+      "WebFetch(domain:noblox.js.org)"
+    ]
+  }
+}

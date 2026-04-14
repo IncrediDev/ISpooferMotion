@@ -33,6 +33,12 @@ function sanitizeLogMessage(message) {
   sanitized = sanitized.replace(/Bearer\s+[^\s,;},"]*([,}"\s]|$)/gi, 'Bearer {Cookie:Here}$1');
   sanitized = sanitized.replace(/Authorization[=:]\s*[^\s,;},"]*([,}"\s]|$)/gi, 'Authorization:{Cookie:Here}$1');
   sanitized = sanitized.replace(/"Authorization"\s*:\s*"[^"]*"/gi, '"Authorization":"{Cookie:Here}"');
+
+  // Replace Open Cloud API keys
+  sanitized = sanitized.replace(/"x-api-key"\s*:\s*"[^"]*"/gi, '"x-api-key":"{ApiKey:Here}"');
+  sanitized = sanitized.replace(/x-api-key[=:]\s*[^\s,;},"]*([,}"\s]|$)/gi, 'x-api-key:{ApiKey:Here}$1');
+  sanitized = sanitized.replace(/"openCloudApiKey"\s*:\s*"[^"]*"/gi, '"openCloudApiKey":"{ApiKey:Here}"');
+  sanitized = sanitized.replace(/"apiKey"\s*:\s*"[^"]*"/gi, '"apiKey":"{ApiKey:Here}"');
   
   // Replace any Cookie headers
   sanitized = sanitized.replace(/Cookie[=:]\s*[^};"]*([};"]\s*|$)/gi, 'Cookie:{Cookie:Here}$1');
@@ -176,10 +182,47 @@ function sanitizeFilename(filename) {
   return filename.replace(/[<>:"/\\|?*]/g, '_');
 }
 
+/**
+ * Normalizes a Roblox .ROBLOSECURITY cookie value.
+ * Accepts raw token or full cookie header fragment and returns only token value.
+ */
+function normalizeRobloxCookie(cookieValue) {
+  if (!cookieValue || typeof cookieValue !== 'string') return '';
+
+  let normalized = cookieValue.trim();
+
+  // Remove surrounding quotes if present
+  normalized = normalized.replace(/^['"]+|['"]+$/g, '');
+
+  // Accept full cookie strings and extract .ROBLOSECURITY value only
+  const prefixedMatch = normalized.match(/(?:^|;\s*)\.ROBLOSECURITY=([^;]+)/i);
+  if (prefixedMatch && prefixedMatch[1]) {
+    normalized = prefixedMatch[1].trim();
+  }
+
+  // If user pasted only key-value without semicolons
+  normalized = normalized.replace(/^\.ROBLOSECURITY=/i, '').trim();
+
+  // Remove trailing separators/newlines
+  normalized = normalized.replace(/[;\r\n]+$/g, '').trim();
+
+  return normalized;
+}
+
+/**
+ * Creates a valid Cookie header value for Roblox requests.
+ */
+function buildRobloxCookieHeader(cookieValue) {
+  const normalized = normalizeRobloxCookie(cookieValue);
+  return normalized ? `.ROBLOSECURITY=${normalized}` : '';
+}
+
 module.exports = {
   retryAsync,
   clearDownloadsDirectory,
   sanitizeFilename,
+  normalizeRobloxCookie,
+  buildRobloxCookieHeader,
   initializeFileLogging,
   sanitizeLogMessage,
   DEVELOPER_MODE,

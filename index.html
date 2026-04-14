@@ -409,6 +409,14 @@
       <input type="text" id="robloxCookie" name="robloxCookie" placeholder="Enter .ROBLOSECURITY cookie">
     </div>
 
+    <div class="form-group" id="api-key-group">
+      <label for="openCloudApiKey" style="display: flex; align-items: center; gap: 6px;">
+        Open Cloud API Key
+        <span class="tooltip-icon" title="Required for animation uploads. Go to create.roblox.com → Open Cloud → API Keys. Create a key and enable 'Assets' with Read & Write access. Not needed for audio spoofing.">?</span>
+      </label>
+      <input type="text" id="openCloudApiKey" name="openCloudApiKey" placeholder="Enter your Open Cloud API Key (required for animations)">
+    </div>
+
     <div class="form-group">
       <label for="groupId">GroupID</label>
       <input type="text" id="groupId" name="groupId" placeholder="Leave empty if you dont want to upload to group">
@@ -556,6 +564,8 @@
     const uploadRetriesInput = document.getElementById('uploadRetries'); // Get reference
     const uploadRetryDelayInput = document.getElementById('uploadRetryDelay'); // Get reference
     const statusTextElement = document.getElementById('status-text');
+    const openCloudApiKeyInput = document.getElementById('openCloudApiKey');
+    const apiKeyGroup = document.getElementById('api-key-group');
 
     // --- Advanced Options Toggle ---
     if (advancedOptionsBtn && advancedOptionsPanel) {
@@ -818,7 +828,8 @@
                 assetIdLabel.textContent = 'Sound Id Input';
                 animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Sound ID';
-                
+                // API key not needed for audio — hide it
+                if (apiKeyGroup) apiKeyGroup.style.display = 'none';
                 // Fetch audio quota
                 audioQuotaText.textContent = 'Checking audio quota...';
                 audioQuotaInfo.style.display = 'block';
@@ -828,6 +839,8 @@
                 assetIdLabel.textContent = 'Animation Id Input';
                 animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Animation ID';
+                // Show API key field for animations
+                if (apiKeyGroup) apiKeyGroup.style.display = 'block';
                 audioQuotaInfo.style.display = 'none';
             }
         });
@@ -851,6 +864,7 @@
             const data = {
                 animationId: animationIdTextarea.value,
                 robloxCookie: robloxCookieInput.value,
+                apiKey: openCloudApiKeyInput ? openCloudApiKeyInput.value.trim() : '',
                 groupId: groupIdInput.value,
                 maxPlaceIds: parseInt(maxPlaceIdsInput.value) || 10,
                 maxPlaceIdRetries: parseInt(maxPlaceIdRetriesInput.value) || 3,

@@ -2,12 +2,19 @@
 const path = require('path');
 const fsSync = require('fs');
 const fs = require('fs').promises;
-const { DEVELOPER_MODE } = require('./common');
+const { DEVELOPER_MODE, buildRobloxCookieHeader } = require('./common');
 
 /**
  * Downloads an animation asset with progress reporting
  */
 async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, transferId, entryName, originalAssetId, sendTransferUpdate, placeId = null, options = {}) {
+  const cookieHeader = buildRobloxCookieHeader(robloxCookie);
+  if (!cookieHeader) {
+    const errorMsg = 'Missing or invalid ROBLOSECURITY cookie';
+    sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
+    return { success: false, error: errorMsg };
+  }
+
   sendTransferUpdate({ id: transferId, name: entryName, originalAssetId: originalAssetId, status: 'processing', direction: 'download', progress: 0, error: null, size: 0 });
   if (DEVELOPER_MODE) {
     console.log(`[DOWNLOAD DEBUG] Starting download for "${entryName}" (Asset ID: ${originalAssetId})`);
@@ -28,7 +35,7 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const response = await fetch(url, { headers: { Cookie: `.ROBLOSECURITY=${robloxCookie}` }, redirect: 'follow', signal: controller.signal });
+      const response = await fetch(url, { headers: { Cookie: cookieHeader }, redirect: 'follow', signal: controller.signal });
       clearTimeout(timer);
     if (!response.ok) {
       const errorDetail = DEVELOPER_MODE 
@@ -94,7 +101,13 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
 /**
  * Publishes an animation or sound RBXM file to Roblox
  */
-async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToken, groupId = null, transferId, sendTransferUpdate, assetTypeName = 'Animation') {
+async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToken, groupId = null, transferId, sendTransferUpdate, assetTypeName = 'Animation', apiKey = null, userId = null) {
+  const cookieHeader = buildRobloxCookieHeader(cookie);
+  if (!cookieHeader) {
+    sendTransferUpdate({ id: transferId, name, status: 'error', direction: 'upload', error: 'Missing or invalid ROBLOSECURITY cookie' });
+    return { success: false, error: 'Missing or invalid ROBLOSECURITY cookie' };
+  }
+
   let fileBuffer;
   let fileSize = 0;
   try {
@@ -128,7 +141,7 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Cookie': `.ROBLOSECURITY=${cookie}`,
+          'Cookie': cookieHeader,
         },
         body: JSON.stringify({}),
       });
@@ -156,7 +169,7 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
 
     const headers = {
       'Content-Type': 'application/json',
-      'Cookie': `.ROBLOSECURITY=${cookie}`,
+      'Cookie': cookieHeader,
       'x-csrf-token': publishCsrfToken,
       'User-Agent': 'RobloxStudio/WinInet',
     };
@@ -201,46 +214,93 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
       return { success: false, error: errorMsg };
     }
   } else {
-    // Use legacy endpoint for animation uploads
-    const uploadUrl = new URL('https://www.roblox.com/ide/publish/uploadnewanimation');
-    uploadUrl.searchParams.set('assetTypeName', assetTypeName);
-    uploadUrl.searchParams.set('name', name);
-    uploadUrl.searchParams.set('description', 'Placeholder');
-    uploadUrl.searchParams.set('ispublic', 'false');
-    uploadUrl.searchParams.set('allowComments', 'true');
-    uploadUrl.searchParams.set('isGamesAsset', 'false');
-    if (groupId) uploadUrl.searchParams.set('groupId', groupId);
+    // Animation upload via Open Cloud Assets API (legacy endpoint deprecated by Roblox in early 2026)
+    if (!apiKey) {
+      const errorMsg = 'Animation uploads require an Open Cloud API key. The legacy Roblox endpoint was deprecated in early 2026. Enter your API key in the app (create one at create.roblox.com → Open Cloud → API Keys with Assets Read & Write access).';
+      sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
+      return { success: false, error: errorMsg };
+    }
 
-    const headers = {
-      'Content-Type': 'application/octet-stream',
-      'Cookie': `.ROBLOSECURITY=${cookie}`,
-      'X-CSRF-TOKEN': csrfToken,
-      'User-Agent': 'RobloxStudio/WinInet',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    const creatorObj = groupId
+      ? { groupId: String(groupId) }
+      : { userId: String(userId) };
+
+    const requestMetadata = {
+      assetType: 'Animation',
+      displayName: name,
+      description: 'Placeholder',
+      creationContext: { creator: creatorObj },
     };
 
-    if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG - FETCH] Attempting ${assetTypeName} upload for "${name}" to: ${uploadUrl.toString()}`);
+    if (DEVELOPER_MODE) {
+      console.log(`[UPLOAD DEBUG] Attempting Animation upload for "${name}" via Open Cloud API`);
+      console.log(`[UPLOAD DEBUG] Creator: ${JSON.stringify(creatorObj)}`);
+    }
 
     try {
-      const response = await fetch(uploadUrl.toString(), {
+      const formData = new FormData();
+      formData.append('request', JSON.stringify(requestMetadata));
+      formData.append('fileContent', new Blob([fileBuffer], { type: 'model/x-rbxm' }), 'animation.rbxm');
+
+      const response = await fetch('https://apis.roblox.com/assets/v1/assets', {
         method: 'POST',
-        headers,
-        body: fileBuffer,
+        headers: { 'x-api-key': apiKey },
+        body: formData,
       });
-      const bodyText = await response.text();
+
+      const responseData = await response.json();
+
       if (!response.ok) {
-        throw new Error(`Upload failed (Status: ${response.status}). Response: ${bodyText.substring(0, 350)}`);
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('retry-after') || 'unknown';
+          throw new Error(`Rate limit exceeded (429). Retry-After: ${retryAfter}s. Response: ${JSON.stringify(responseData)}`);
+        } else if (response.status === 401 || response.status === 403) {
+          throw new Error(`API key rejected (${response.status}). Make sure your key has Assets Read & Write permissions. Response: ${JSON.stringify(responseData)}`);
+        } else if (response.status >= 500) {
+          throw new Error(`Server error (${response.status}). Response: ${JSON.stringify(responseData)}`);
+        } else {
+          throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
+        }
       }
-      const newAssetId = bodyText.trim();
-      if (newAssetId && /^\d+$/.test(newAssetId)) {
-        sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: newAssetId });
-        return { success: true, assetId: newAssetId };
-      } else {
-        throw new Error(`Upload successful (Status ${response.status}) but the response was not a valid Asset ID. Response: "${bodyText.substring(0, 350)}"`);
+
+      // Synchronous success
+      if (responseData.done && responseData.response) {
+        const assetId = responseData.response.assetId || responseData.response.Id;
+        if (assetId) {
+          sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
+          return { success: true, assetId: String(assetId) };
+        }
       }
+
+      // Async operation — poll until done
+      if (responseData.path && !responseData.done) {
+        const operationPath = responseData.path;
+        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Operation pending, polling: ${operationPath}`);
+        const maxPollAttempts = 15;
+        const pollIntervalMs = 2000;
+        for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+          const pollResp = await fetch(`https://apis.roblox.com/assets/v1/${operationPath}`, {
+            headers: { 'x-api-key': apiKey },
+          });
+          const pollData = await pollResp.json();
+          if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Poll attempt ${attempt}/${maxPollAttempts}: done=${pollData.done}`);
+          if (pollData.done && pollData.response) {
+            const assetId = pollData.response.assetId || pollData.response.Id;
+            if (assetId) {
+              sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
+              return { success: true, assetId: String(assetId) };
+            }
+          }
+        }
+        throw new Error('Upload timed out waiting for Roblox to process the animation.');
+      }
+
+      throw new Error(`Unexpected response from Open Cloud API: ${JSON.stringify(responseData)}`);
     } catch (err) {
       const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
-      console.error(`[UPLOAD ERROR - FETCH] ${assetTypeName} upload failed: ${errorMsg}`, err.cause || err);
+      const isRateLimit = errorMsg.includes('429') || errorMsg.includes('Rate limit');
+      console.error(`[UPLOAD ERROR] Animation upload failed${isRateLimit ? ' (RATE LIMIT)' : ''}: ${errorMsg}`);
       sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
       return { success: false, error: errorMsg };
     }

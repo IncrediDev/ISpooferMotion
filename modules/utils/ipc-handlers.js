@@ -2,8 +2,8 @@
 const path = require('path');
 const { ipcMain, app } = require('electron');
 const crypto = require('crypto');
-const { DEVELOPER_MODE } = require('./common');
-const { getCookieFromRobloxStudio, getCsrfToken, getPlaceIdFromCreator } = require('./roblox-api');
+const { DEVELOPER_MODE, buildRobloxCookieHeader } = require('./common');
+const { getCookieFromRobloxStudio, getCsrfToken, getPlaceIdFromCreator, getAuthenticatedUserId } = require('./roblox-api');
 const { clearDownloadsDirectory, retryAsync, sanitizeFilename } = require('./common');
 const { downloadAnimationAssetWithProgress, publishAnimationRbxmWithProgress } = require('./transfer-handlers');
 const fs = require('fs').promises;
@@ -67,10 +67,15 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
         return { error: 'No cookie provided' };
       }
 
+      const cookieHeader = buildRobloxCookieHeader(cookie);
+      if (!cookieHeader) {
+        return { error: 'Invalid ROBLOSECURITY cookie format' };
+      }
+
       if (DEVELOPER_MODE) console.log('(Dev) Fetching from Roblox API...');
       const response = await fetch('https://publish.roblox.com/v1/asset-quotas?resourceType=RateLimitUpload&assetType=Audio', {
         headers: {
-          'Cookie': `.ROBLOSECURITY=${cookie}`,
+          'Cookie': cookieHeader,
           'User-Agent': 'RobloxStudio/WinInet',
         }
       });
@@ -147,6 +152,16 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
 
   if (!data.enableSpoofing && !data.downloadOnly) {
     sendSpooferResultToRenderer({ output: 'Enable Spoofing toggle is OFF and Download-Only mode is not enabled.', success: false });
+    return;
+  }
+
+  // Animations now require an Open Cloud API key (legacy endpoint deprecated early 2026)
+  const isSoundModeEarly = data.spoofSounds === true;
+  if (!isSoundModeEarly && !data.downloadOnly && !data.apiKey) {
+    sendSpooferResultToRenderer({
+      output: 'Animation uploads now require an Open Cloud API key.\n\nThe legacy Roblox upload endpoint was deprecated in early 2026.\n\nTo fix this:\n1. Go to create.roblox.com → Open Cloud → API Keys\n2. Create a key with Assets Read & Write permissions\n3. Paste the key into the "Open Cloud API Key" field',
+      success: false
+    });
     return;
   }
 
@@ -536,6 +551,19 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   });
   const downloadResults = await Promise.all(downloadPromises);
 
+  // For animation uploads, resolve the authenticated user ID once before the upload loop
+  let authenticatedUserId = null;
+  if (!isSoundMode && !data.downloadOnly && data.apiKey && !data.groupId) {
+    try {
+      authenticatedUserId = await getAuthenticatedUserId(robloxCookie);
+      if (DEVELOPER_MODE) console.log(`(Dev) Resolved authenticated user ID for upload: ${authenticatedUserId}`);
+    } catch (err) {
+      if (DEVELOPER_MODE) console.warn(`(Dev) Could not resolve authenticated user ID: ${err.message}`);
+      sendSpooferResultToRenderer({ output: `Failed to resolve your Roblox user ID: ${err.message}\n\nMake sure your cookie is valid.`, success: false });
+      return;
+    }
+  }
+
   // Parallel uploads (skip if download-only mode)
   let uploadResults = [];
   if (data.downloadOnly) {
@@ -576,7 +604,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         error: err.message.substring(0, 120),
       });
     };
-    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName);
+    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, !isSoundMode ? (data.apiKey || null) : null, !isSoundMode ? (authenticatedUserId || null) : null);
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);
       uploadCompleted++;
