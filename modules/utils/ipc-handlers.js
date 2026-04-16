@@ -345,8 +345,11 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         creatorGroups[creatorKey].push(item);
       }
       
-      // Process each creator group separately
+      // Process each creator group separately, with a small inter-group delay to avoid rate limits
+      let creatorGroupIndex = 0;
       for (const [creatorKey, items] of Object.entries(creatorGroups)) {
+        if (creatorGroupIndex > 0) await new Promise(r => setTimeout(r, 500));
+        creatorGroupIndex++;
         let [creatorType, creatorId] = creatorKey.split(':');
         let placeIdArray = placeIdMap[creatorKey] || [99840799534728];
         let placeIdIndex = 0;
@@ -400,9 +403,15 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
               throw new Error(`Batch request failed for ${creatorKey}: ${statusText}`);
             }
 
-            // Backoff with basic jitter
+            // On 429, respect retry-after header; otherwise use configured delay
+            let delayMs = BATCH_RETRY_DELAY_MS;
+            if (status === 429 && resp) {
+              const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
+              if (retryAfter > 0) delayMs = Math.min(retryAfter * 1000, 120000);
+              else delayMs = Math.max(BATCH_RETRY_DELAY_MS, 15000); // default 15s on 429
+            }
             const jitter = Math.floor(Math.random() * 300);
-            await new Promise(r => setTimeout(r, BATCH_RETRY_DELAY_MS + jitter));
+            await new Promise(r => setTimeout(r, delayMs + jitter));
           }
 
           if (!locations) throw new Error(`Batch request failed for ${creatorKey}: no response`);
