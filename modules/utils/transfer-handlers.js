@@ -238,23 +238,34 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
     }
 
     try {
-      const formData = new FormData();
-      formData.append('request', JSON.stringify(requestMetadata));
-      formData.append('fileContent', new Blob([fileBuffer], { type: 'model/x-rbxm' }), 'animation.rbxm');
+      const MAX_RATE_LIMIT_RETRIES = 4;
+      let response, responseData;
+      for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        const formData = new FormData();
+        formData.append('request', JSON.stringify(requestMetadata));
+        formData.append('fileContent', new Blob([fileBuffer], { type: 'model/x-rbxm' }), 'animation.rbxm');
 
-      const response = await fetch('https://apis.roblox.com/assets/v1/assets', {
-        method: 'POST',
-        headers: { 'x-api-key': apiKey },
-        body: formData,
-      });
+        response = await fetch('https://apis.roblox.com/assets/v1/assets', {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey },
+          body: formData,
+        });
 
-      const responseData = await response.json();
+        if (response.status === 429) {
+          if (attempt >= MAX_RATE_LIMIT_RETRIES) throw new Error(`Rate limit hit after ${MAX_RATE_LIMIT_RETRIES} retries. Try again later.`);
+          const retryAfter = Math.min(parseInt(response.headers.get('retry-after') || '60', 10), 120);
+          if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Rate limited (429), waiting ${retryAfter}s before retry ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}`);
+          sendTransferUpdate({ id: transferId, status: 'processing', progress: 0 });
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          continue;
+        }
+
+        responseData = await response.json();
+        break;
+      }
 
       if (!response.ok) {
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('retry-after') || 'unknown';
-          throw new Error(`Rate limit exceeded (429). Retry-After: ${retryAfter}s. Response: ${JSON.stringify(responseData)}`);
-        } else if (response.status === 401 || response.status === 403) {
+        if (response.status === 401 || response.status === 403) {
           throw new Error(`API key rejected (${response.status}). Make sure your key has Assets Read & Write permissions. Response: ${JSON.stringify(responseData)}`);
         } else if (response.status >= 500) {
           throw new Error(`Server error (${response.status}). Response: ${JSON.stringify(responseData)}`);

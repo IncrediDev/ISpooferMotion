@@ -574,7 +574,9 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     let uploadCompleted = 0;
     const uploadStartTime = Date.now();
     const successfulDownloads = downloadResults.filter((r) => r.success);
-    const uploadPromises = successfulDownloads.map(async (downloadResult) => {
+    // Open Cloud API rate limit is 60 requests/min — cap animation upload concurrency
+    const UPLOAD_CONCURRENCY = isSoundMode ? 15 : Math.min(6, successfulDownloads.length);
+    const uploadOne = async (downloadResult) => {
     const entry = downloadResult.entry;
     const filePath = downloadResult.filePath;
     const uploadTransferId = crypto.randomUUID();
@@ -630,8 +632,12 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
       sendStatusMessage(`Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`);
       return { entry, success: false, error: finalRetryError.message };
     }
-  });
-    uploadResults = await Promise.all(uploadPromises);
+  };
+    for (let i = 0; i < successfulDownloads.length; i += UPLOAD_CONCURRENCY) {
+      const batch = successfulDownloads.slice(i, i + UPLOAD_CONCURRENCY);
+      const batchResults = await Promise.all(batch.map(uploadOne));
+      uploadResults.push(...batchResults);
+    }
   }
 
   // Process results
