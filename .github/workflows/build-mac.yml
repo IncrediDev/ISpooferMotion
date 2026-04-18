@@ -8,6 +8,10 @@ jobs:
   build-mac:
     runs-on: macos-latest
 
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
     steps:
       - uses: actions/checkout@v4
 
@@ -20,21 +24,21 @@ jobs:
         run: npm install
 
       - name: Rebuild native modules for Electron
-        run: npx electron-rebuild
+        run: npx electron-rebuild --arch=${{ matrix.arch }}
 
       - name: Build for Mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run build -- --mac --publish never
+        run: npm run build -- --mac --${{ matrix.arch }} --publish never
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: mac-build-dmg
+          name: mac-${{ matrix.arch }}-dmg
           path: dist/*.dmg
 
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: mac-build-zip
+          name: mac-${{ matrix.arch }}-zip
           path: dist/*.zip
