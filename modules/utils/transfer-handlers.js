@@ -128,193 +128,113 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
     error: null,
   });
 
-  // Use different endpoint for Audio vs Animation
   const isAudio = assetTypeName === 'Audio';
-  
-  if (isAudio) {
-    // Use modern API for audio uploads - need to get CSRF token for publish.roblox.com domain
-    let publishCsrfToken = csrfToken;
-    
-    // Get a fresh CSRF token specifically for publish.roblox.com
-    try {
-      const csrfResponse = await fetch('https://publish.roblox.com/v1/audio', {
+
+  // Both Audio and Animation use Open Cloud Assets API
+  if (!apiKey) {
+    const assetLabel = isAudio ? 'Sound' : 'Animation';
+    const errorMsg = `${assetLabel} uploads require an Open Cloud API key. Go to create.roblox.com → Open Cloud → API Keys and create a key with Assets Read & Write permissions.`;
+    sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
+    return { success: false, error: errorMsg };
+  }
+
+  const creatorObj = groupId
+    ? { groupId: String(groupId) }
+    : { userId: String(userId) };
+
+  const assetType = isAudio ? 'Audio' : 'Animation';
+  const fileType = isAudio ? 'audio/ogg' : 'model/x-rbxm';
+  const fileName = isAudio ? 'audio.ogg' : 'animation.rbxm';
+
+  const requestMetadata = {
+    assetType,
+    displayName: name,
+    description: 'Placeholder',
+    creationContext: { creator: creatorObj },
+  };
+
+  if (DEVELOPER_MODE) {
+    console.log(`[UPLOAD DEBUG] Attempting ${assetType} upload for "${name}" via Open Cloud API`);
+    console.log(`[UPLOAD DEBUG] Creator: ${JSON.stringify(creatorObj)}`);
+  }
+
+  try {
+    const MAX_RATE_LIMIT_RETRIES = 4;
+    let response, responseData;
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+      const formData = new FormData();
+      formData.append('request', JSON.stringify(requestMetadata));
+      formData.append('fileContent', new Blob([fileBuffer], { type: fileType }), fileName);
+
+      response = await fetch('https://apis.roblox.com/assets/v1/assets', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': cookieHeader,
-        },
-        body: JSON.stringify({}),
+        headers: { 'x-api-key': apiKey },
+        body: formData,
       });
-      const newToken = csrfResponse.headers.get('x-csrf-token');
-      if (newToken) {
-        publishCsrfToken = newToken;
-        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Got fresh CSRF token for publish.roblox.com`);
+
+      if (response.status === 429) {
+        if (attempt >= MAX_RATE_LIMIT_RETRIES) throw new Error(`Rate limit hit after ${MAX_RATE_LIMIT_RETRIES} retries. Try again later.`);
+        const retryAfter = Math.min(parseInt(response.headers.get('retry-after') || '60', 10), 120);
+        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Rate limited (429), waiting ${retryAfter}s before retry ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}`);
+        sendTransferUpdate({ id: transferId, status: 'processing', progress: 0 });
+        await new Promise(r => setTimeout(r, retryAfter * 1000));
+        continue;
       }
-    } catch (csrfError) {
-      if (DEVELOPER_MODE) console.warn(`[UPLOAD DEBUG] Failed to get fresh CSRF token, using existing one:`, csrfError.message);
+
+      responseData = await response.json();
+      break;
     }
 
-    const uploadUrl = 'https://publish.roblox.com/v1/audio';
-    
-    // Create JSON payload for audio upload
-    const payload = {
-      name: name,
-      file: fileBuffer.toString('base64'),
-      assetPrivacy: 1,
-      estimatedFileSize: fileSize,
-      estimatedDuration: 0,
-      paymentSource: 'User'
-    };
-    if (groupId) payload.groupId = parseInt(groupId);
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'Cookie': cookieHeader,
-      'x-csrf-token': publishCsrfToken,
-      'User-Agent': 'RobloxStudio/WinInet',
-    };
-
-    if (DEVELOPER_MODE) {
-      console.log(`[UPLOAD DEBUG - FETCH] Attempting ${assetTypeName} upload for "${name}" to: ${uploadUrl}`);
-      console.log(`[UPLOAD DEBUG] Payload size: ${fileSize} bytes (base64: ${payload.file.length} chars)`);
-    }
-
-    try {
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
-      const responseData = await response.json();
-      if (!response.ok) {
-        // Detect rate limit (429) or server errors for clearer messaging
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('retry-after') || 'unknown';
-          throw new Error(`Rate limit exceeded (429). Retry-After: ${retryAfter}s. Response: ${JSON.stringify(responseData)}`);
-        } else if (response.status >= 500) {
-          throw new Error(`Server error (${response.status}). Response: ${JSON.stringify(responseData)}`);
-        } else {
-          throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
-        }
-      }
-      const newAssetId = responseData.Id || responseData.id || responseData.assetId;
-      if (newAssetId) {
-        sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: newAssetId.toString() });
-        return { success: true, assetId: newAssetId.toString() };
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(`API key rejected (${response.status}). Make sure your key has Assets Read & Write permissions. Response: ${JSON.stringify(responseData)}`);
+      } else if (response.status >= 500) {
+        throw new Error(`Server error (${response.status}). Response: ${JSON.stringify(responseData)}`);
       } else {
-        throw new Error(`Upload successful (Status ${response.status}) but the response did not contain an asset ID. Response: ${JSON.stringify(responseData)}`);
+        throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
       }
-    } catch (err) {
-      const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
-      const isRateLimit = errorMsg.includes('429') || errorMsg.includes('Rate limit');
-      if (DEVELOPER_MODE || isRateLimit) {
-        console.error(`[UPLOAD ERROR - FETCH] ${assetTypeName} upload failed${isRateLimit ? ' (RATE LIMIT)' : ''}: ${errorMsg}`, err.cause || err);
+    }
+
+    // Synchronous success
+    if (responseData.done && responseData.response) {
+      const assetId = responseData.response.assetId || responseData.response.Id;
+      if (assetId) {
+        sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
+        return { success: true, assetId: String(assetId) };
       }
-      sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
-      return { success: false, error: errorMsg };
-    }
-  } else {
-    // Animation upload via Open Cloud Assets API (legacy endpoint deprecated by Roblox in early 2026)
-    if (!apiKey) {
-      const errorMsg = 'Animation uploads require an Open Cloud API key. The legacy Roblox endpoint was deprecated in early 2026. Enter your API key in the app (create one at create.roblox.com → Open Cloud → API Keys with Assets Read & Write access).';
-      sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
-      return { success: false, error: errorMsg };
     }
 
-    const creatorObj = groupId
-      ? { groupId: String(groupId) }
-      : { userId: String(userId) };
-
-    const requestMetadata = {
-      assetType: 'Animation',
-      displayName: name,
-      description: 'Placeholder',
-      creationContext: { creator: creatorObj },
-    };
-
-    if (DEVELOPER_MODE) {
-      console.log(`[UPLOAD DEBUG] Attempting Animation upload for "${name}" via Open Cloud API`);
-      console.log(`[UPLOAD DEBUG] Creator: ${JSON.stringify(creatorObj)}`);
-    }
-
-    try {
-      const MAX_RATE_LIMIT_RETRIES = 4;
-      let response, responseData;
-      for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-        const formData = new FormData();
-        formData.append('request', JSON.stringify(requestMetadata));
-        formData.append('fileContent', new Blob([fileBuffer], { type: 'model/x-rbxm' }), 'animation.rbxm');
-
-        response = await fetch('https://apis.roblox.com/assets/v1/assets', {
-          method: 'POST',
+    // Async operation — poll until done
+    if (responseData.path && !responseData.done) {
+      const operationPath = responseData.path;
+      if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Operation pending, polling: ${operationPath}`);
+      const maxPollAttempts = 15;
+      const pollIntervalMs = 2000;
+      for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+        const pollResp = await fetch(`https://apis.roblox.com/assets/v1/${operationPath}`, {
           headers: { 'x-api-key': apiKey },
-          body: formData,
         });
-
-        if (response.status === 429) {
-          if (attempt >= MAX_RATE_LIMIT_RETRIES) throw new Error(`Rate limit hit after ${MAX_RATE_LIMIT_RETRIES} retries. Try again later.`);
-          const retryAfter = Math.min(parseInt(response.headers.get('retry-after') || '60', 10), 120);
-          if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Rate limited (429), waiting ${retryAfter}s before retry ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}`);
-          sendTransferUpdate({ id: transferId, status: 'processing', progress: 0 });
-          await new Promise(r => setTimeout(r, retryAfter * 1000));
-          continue;
-        }
-
-        responseData = await response.json();
-        break;
-      }
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          throw new Error(`API key rejected (${response.status}). Make sure your key has Assets Read & Write permissions. Response: ${JSON.stringify(responseData)}`);
-        } else if (response.status >= 500) {
-          throw new Error(`Server error (${response.status}). Response: ${JSON.stringify(responseData)}`);
-        } else {
-          throw new Error(`Upload failed (Status: ${response.status}). Response: ${JSON.stringify(responseData)}`);
-        }
-      }
-
-      // Synchronous success
-      if (responseData.done && responseData.response) {
-        const assetId = responseData.response.assetId || responseData.response.Id;
-        if (assetId) {
-          sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
-          return { success: true, assetId: String(assetId) };
-        }
-      }
-
-      // Async operation — poll until done
-      if (responseData.path && !responseData.done) {
-        const operationPath = responseData.path;
-        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Operation pending, polling: ${operationPath}`);
-        const maxPollAttempts = 15;
-        const pollIntervalMs = 2000;
-        for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
-          await new Promise(r => setTimeout(r, pollIntervalMs));
-          const pollResp = await fetch(`https://apis.roblox.com/assets/v1/${operationPath}`, {
-            headers: { 'x-api-key': apiKey },
-          });
-          const pollData = await pollResp.json();
-          if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Poll attempt ${attempt}/${maxPollAttempts}: done=${pollData.done}`);
-          if (pollData.done && pollData.response) {
-            const assetId = pollData.response.assetId || pollData.response.Id;
-            if (assetId) {
-              sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
-              return { success: true, assetId: String(assetId) };
-            }
+        const pollData = await pollResp.json();
+        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Poll attempt ${attempt}/${maxPollAttempts}: done=${pollData.done}`);
+        if (pollData.done && pollData.response) {
+          const assetId = pollData.response.assetId || pollData.response.Id;
+          if (assetId) {
+            sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
+            return { success: true, assetId: String(assetId) };
           }
         }
-        throw new Error('Upload timed out waiting for Roblox to process the animation.');
       }
-
-      throw new Error(`Unexpected response from Open Cloud API: ${JSON.stringify(responseData)}`);
-    } catch (err) {
-      const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
-      const isRateLimit = errorMsg.includes('429') || errorMsg.includes('Rate limit');
-      console.error(`[UPLOAD ERROR] Animation upload failed${isRateLimit ? ' (RATE LIMIT)' : ''}: ${errorMsg}`);
-      sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
-      return { success: false, error: errorMsg };
+      throw new Error(`Upload timed out waiting for Roblox to process the ${assetType.toLowerCase()}.`);
     }
+
+    throw new Error(`Unexpected response from Open Cloud API: ${JSON.stringify(responseData)}`);
+  } catch (err) {
+    const errorMsg = err.message || `Upload failed for "${name}" due to an unknown error.`;
+    const isRateLimit = errorMsg.includes('429') || errorMsg.includes('Rate limit');
+    console.error(`[UPLOAD ERROR] ${assetType} upload failed${isRateLimit ? ' (RATE LIMIT)' : ''}: ${errorMsg}`);
+    sendTransferUpdate({ id: transferId, status: 'error', error: errorMsg, progress: 0 });
+    return { success: false, error: errorMsg };
   }
 }
 

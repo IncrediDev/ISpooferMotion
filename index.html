@@ -370,6 +370,67 @@
         cursor: not-allowed;
     }
 
+    /* Update modal */
+    #update-modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+    }
+    #update-modal-overlay.visible {
+      display: flex;
+    }
+    #update-modal {
+      background: var(--titlebar-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 24px;
+      width: 340px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      text-align: center;
+    }
+    #update-modal h2 {
+      margin: 0 0 8px 0;
+      font-size: 18px;
+      color: var(--green-accent);
+    }
+    #update-modal .update-version-info {
+      font-size: 13px;
+      color: var(--label-color);
+      margin-bottom: 20px;
+    }
+    .update-modal-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .update-modal-buttons button {
+      padding: 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: opacity 0.2s;
+    }
+    .update-modal-buttons button:hover { opacity: 0.85; }
+    #update-download-btn {
+      background-color: var(--green-accent);
+      color: #fff;
+    }
+    #update-discord-btn {
+      background-color: #5865F2;
+      color: #fff;
+    }
+    #update-dismiss-btn {
+      background-color: var(--input-bg);
+      color: var(--label-color);
+      font-weight: normal;
+    }
+
   </style>
 </head>
 <body>
@@ -412,7 +473,7 @@
     <div class="form-group" id="api-key-group">
       <label for="openCloudApiKey" style="display: flex; align-items: center; gap: 6px;">
         Open Cloud API Key
-        <span class="tooltip-icon" title="Required for animation uploads. Go to create.roblox.com → Open Cloud → API Keys. Create a key and enable 'Assets' with Read & Write access. Not needed for audio spoofing.">?</span>
+        <span class="tooltip-icon" title="Required for animation and sound uploads. Go to create.roblox.com → Open Cloud → API Keys. Create a key and enable 'Assets' with Read & Write access.">?</span>
       </label>
       <input type="text" id="openCloudApiKey" name="openCloudApiKey" placeholder="Enter your Open Cloud API Key (required for animations)">
     </div>
@@ -514,6 +575,19 @@
     </div>
   </div>
 
+  <!-- Update available modal -->
+  <div id="update-modal-overlay">
+    <div id="update-modal">
+      <h2>Update Available!</h2>
+      <p class="update-version-info" id="update-version-info">A new version is available.</p>
+      <div class="update-modal-buttons">
+        <button id="update-download-btn">Download Update</button>
+        <button id="update-discord-btn">Join Discord for Updates</button>
+        <button id="update-dismiss-btn">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
   <!-- NEW: Status Bar HTML -->
   <div id="status-bar">
     <span id="status-text">Ready</span> <!-- Initial status message -->
@@ -599,6 +673,52 @@
   } else {
     console.warn('electronAPI.getAppVersion not found.');
   }
+
+  // --- Update check ---
+  (async function checkForUpdates() {
+    try {
+      const currentVersion = await window.electronAPI.getAppVersion();
+      const resp = await fetch('https://api.github.com/repos/IncrediDev/ISpooferMotion/releases/latest', {
+        headers: { 'Accept': 'application/vnd.github+json' }
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const latestTag = (data.tag_name || '').replace(/^v/, '');
+      const current = currentVersion.replace(/^v/, '');
+
+      function isNewer(latest, current) {
+        const a = latest.split('.').map(Number);
+        const b = current.split('.').map(Number);
+        for (let i = 0; i < 3; i++) {
+          if ((a[i] || 0) > (b[i] || 0)) return true;
+          if ((a[i] || 0) < (b[i] || 0)) return false;
+        }
+        return false;
+      }
+
+      if (!latestTag || !isNewer(latestTag, current)) return;
+
+      const infoEl = document.getElementById('update-version-info');
+      if (infoEl) infoEl.textContent = `v${current} → v${latestTag} is now available.`;
+
+      const overlay = document.getElementById('update-modal-overlay');
+      if (overlay) overlay.classList.add('visible');
+
+      document.getElementById('update-download-btn').addEventListener('click', () => {
+        window.electronAPI.openExternal('https://github.com/IncrediDev/ISpooferMotion/releases/latest');
+        overlay.classList.remove('visible');
+      });
+      document.getElementById('update-discord-btn').addEventListener('click', () => {
+        window.electronAPI.openExternal('https://discord.gg/ispoofermotion');
+        overlay.classList.remove('visible');
+      });
+      document.getElementById('update-dismiss-btn').addEventListener('click', () => {
+        overlay.classList.remove('visible');
+      });
+    } catch (err) {
+      console.warn('Update check failed:', err);
+    }
+  })();
 
   // --- Logs button (open logs folder) ---
   const logsBtn = document.getElementById('logs-btn');
@@ -828,19 +948,11 @@
                 assetIdLabel.textContent = 'Sound Id Input';
                 animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Sound ID';
-                // API key not needed for audio — hide it
-                if (apiKeyGroup) apiKeyGroup.style.display = 'none';
-                // Fetch audio quota
-                audioQuotaText.textContent = 'Checking audio quota...';
-                audioQuotaInfo.style.display = 'block';
-                currentAudioQuota = await fetchAudioQuota();
-                updateAudioQuotaDisplay();
+                audioQuotaInfo.style.display = 'none';
             } else {
                 assetIdLabel.textContent = 'Animation Id Input';
                 animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Animation ID';
-                // Show API key field for animations
-                if (apiKeyGroup) apiKeyGroup.style.display = 'block';
                 audioQuotaInfo.style.display = 'none';
             }
         });

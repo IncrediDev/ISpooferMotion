@@ -155,11 +155,10 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     return;
   }
 
-  // Animations now require an Open Cloud API key (legacy endpoint deprecated early 2026)
-  const isSoundModeEarly = data.spoofSounds === true;
-  if (!isSoundModeEarly && !data.downloadOnly && !data.apiKey) {
+  // Both animation and sound uploads require an Open Cloud API key
+  if (!data.downloadOnly && !data.apiKey) {
     sendSpooferResultToRenderer({
-      output: 'Animation uploads now require an Open Cloud API key.\n\nThe legacy Roblox upload endpoint was deprecated in early 2026.\n\nTo fix this:\n1. Go to create.roblox.com → Open Cloud → API Keys\n2. Create a key with Assets Read & Write permissions\n3. Paste the key into the "Open Cloud API Key" field',
+      output: 'Uploads now require an Open Cloud API key.\n\nTo fix this:\n1. Go to create.roblox.com → Open Cloud → API Keys\n2. Create a key with Assets Read & Write permissions\n3. Paste the key into the "Open Cloud API Key" field',
       success: false
     });
     return;
@@ -560,9 +559,9 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   });
   const downloadResults = await Promise.all(downloadPromises);
 
-  // For animation uploads, resolve the authenticated user ID once before the upload loop
+  // Resolve the authenticated user ID once before the upload loop (needed for user-owned uploads)
   let authenticatedUserId = null;
-  if (!isSoundMode && !data.downloadOnly && data.apiKey && !data.groupId) {
+  if (!data.downloadOnly && data.apiKey && !data.groupId) {
     try {
       authenticatedUserId = await getAuthenticatedUserId(robloxCookie);
       if (DEVELOPER_MODE) console.log(`(Dev) Resolved authenticated user ID for upload: ${authenticatedUserId}`);
@@ -583,8 +582,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     let uploadCompleted = 0;
     const uploadStartTime = Date.now();
     const successfulDownloads = downloadResults.filter((r) => r.success);
-    // Open Cloud API rate limit is 60 requests/min — cap animation upload concurrency
-    const UPLOAD_CONCURRENCY = isSoundMode ? 15 : Math.min(6, successfulDownloads.length);
+    // Open Cloud API rate limit is 60 requests/min — cap upload concurrency
+    const UPLOAD_CONCURRENCY = Math.min(6, successfulDownloads.length);
     const uploadOne = async (downloadResult) => {
     const entry = downloadResult.entry;
     const filePath = downloadResult.filePath;
@@ -615,7 +614,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         error: err.message.substring(0, 120),
       });
     };
-    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, !isSoundMode ? (data.apiKey || null) : null, !isSoundMode ? (authenticatedUserId || null) : null);
+    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, data.apiKey || null, authenticatedUserId || null);
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);
       uploadCompleted++;
