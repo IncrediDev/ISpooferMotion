@@ -4,6 +4,16 @@ const fsSync = require('fs');
 const fs = require('fs').promises;
 const { DEVELOPER_MODE, buildRobloxCookieHeader } = require('./common');
 
+// Shared rate-limit gate for Open Cloud uploads.
+// When any concurrent slot hits a 429, it sets this timestamp so all other
+// slots pause before their next POST, preventing the thundering-herd retry loop.
+let _rlUntil = 0;
+function setRateLimit(ms) { _rlUntil = Math.max(_rlUntil, Date.now() + ms); }
+async function waitRateLimit() {
+  const wait = _rlUntil - Date.now();
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+}
+
 /**
  * Downloads an animation asset with progress reporting
  */
@@ -166,6 +176,7 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
       formData.append('request', JSON.stringify(requestMetadata));
       formData.append('fileContent', new Blob([fileBuffer], { type: fileType }), fileName);
 
+      await waitRateLimit();
       response = await fetch('https://apis.roblox.com/assets/v1/assets', {
         method: 'POST',
         headers: { 'x-api-key': apiKey },
@@ -174,10 +185,12 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
 
       if (response.status === 429) {
         if (attempt >= MAX_RATE_LIMIT_RETRIES) throw new Error(`Rate limit hit after ${MAX_RATE_LIMIT_RETRIES} retries. Try again later.`);
-        const retryAfter = Math.min(parseInt(response.headers.get('retry-after') || '60', 10), 120);
-        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Rate limited (429), waiting ${retryAfter}s before retry ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}`);
+        const retryAfter = Math.min(parseInt(response.headers.get('retry-after') || '30', 10), 60);
+        const jitter = Math.floor(Math.random() * 8000);
+        if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Rate limited (429), pausing all slots for ${retryAfter}s + ${jitter}ms jitter`);
         sendTransferUpdate({ id: transferId, status: 'processing', progress: 0 });
-        await new Promise(r => setTimeout(r, retryAfter * 1000));
+        setRateLimit(retryAfter * 1000 + jitter);
+        await waitRateLimit();
         continue;
       }
 
@@ -205,14 +218,20 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
     }
 
     // Async operation — poll until done
+    // Roblox may return path as "operations/{id}" or "assets/v1/operations/{id}".
+    // Normalise to always produce https://apis.roblox.com/assets/v1/operations/{id}.
     if (responseData.path && !responseData.done) {
       const operationPath = responseData.path;
-      if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Operation pending, polling: ${operationPath}`);
-      const maxPollAttempts = 15;
-      const pollIntervalMs = 2000;
+      const normalizedPath = operationPath.startsWith('assets/')
+        ? operationPath
+        : `assets/v1/${operationPath}`;
+      const pollUrl = `https://apis.roblox.com/${normalizedPath}`;
+      if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Operation pending, polling: ${pollUrl} (raw: ${operationPath})`);
+      const maxPollAttempts = 30;
+      const pollIntervalMs = 1000;
       for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
         await new Promise(r => setTimeout(r, pollIntervalMs));
-        const pollResp = await fetch(`https://apis.roblox.com/assets/v1/${operationPath}`, {
+        const pollResp = await fetch(pollUrl, {
           headers: { 'x-api-key': apiKey },
         });
         const pollData = await pollResp.json();

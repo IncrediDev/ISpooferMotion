@@ -480,7 +480,7 @@
 
     <div class="form-group">
       <label for="groupId">GroupID</label>
-      <input type="text" id="groupId" name="groupId" placeholder="Leave empty if you dont want to upload to group">
+      <input type="text" id="groupId" name="groupId" autocomplete="off" placeholder="Leave empty if you dont want to upload to group">
     </div>
 
     <button id="advanced-options-btn" style="align-self: flex-start; padding: 6px 12px; background-color: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 12px; margin-bottom: 10px; transition: background-color 0.2s;">⚙️ Advanced Options</button>
@@ -563,7 +563,15 @@
       </div>
     </div>
 
-    <button id="run-spoofer-btn">Run Spoofer</button>
+    <div id="session-banner" style="display:none; background:var(--input-bg); border:1px solid var(--border-color); border-radius:4px; padding:10px 14px; margin-bottom:10px; font-size:13px; color:var(--text-color);">
+      ⚠️ Incomplete session found. <strong id="session-pending-count"></strong> asset(s) still pending.
+      <button id="session-resume-btn" style="margin-left:10px; padding:4px 10px; background:var(--green-accent); color:var(--text-color); border:none; border-radius:4px; cursor:pointer; font-size:12px;">Resume</button>
+      <button id="session-discard-btn" style="margin-left:6px; padding:4px 10px; background:var(--input-bg); color:var(--label-color); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:12px;">Discard</button>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button id="run-spoofer-btn" style="flex:1;">Run Spoofer</button>
+      <button id="pause-spoofer-btn" style="display:none; padding:10px 16px; background:var(--input-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:14px;">⏸ Pause</button>
+    </div>
 
     <div id="audio-quota-info" style="margin-top: 10px; padding: 10px; background-color: var(--input-bg); border-radius: 4px; font-size: 13px; color: var(--label-color); display: none;">
       <span id="audio-quota-text">Checking audio quota...</span>
@@ -746,6 +754,65 @@
     });
   }
 
+    // --- Pause / Resume ---
+    const pauseBtn = document.getElementById('pause-spoofer-btn');
+    let _paused = false;
+    if (pauseBtn && window.electronAPI) {
+      pauseBtn.addEventListener('click', () => {
+        if (_paused) {
+          _paused = false;
+          pauseBtn.textContent = '⏸ Pause';
+          window.electronAPI.resumeSpoofer();
+        } else {
+          _paused = true;
+          pauseBtn.textContent = '▶ Resume';
+          window.electronAPI.pauseSpoofer();
+        }
+      });
+    }
+
+    // --- Session recovery banner ---
+    const sessionBanner = document.getElementById('session-banner');
+    const sessionPendingCount = document.getElementById('session-pending-count');
+    let _pendingSessionData = null;
+    if (window.electronAPI && window.electronAPI.checkSession) {
+      window.electronAPI.checkSession().then(session => {
+        if (session && session.animationIdInput) {
+          const pending = (session.totalCount || 0) - (session.completedMappings || []).length;
+          if (pending > 0) {
+            _pendingSessionData = session;
+            sessionPendingCount.textContent = pending;
+            sessionBanner.style.display = 'block';
+          }
+        }
+      }).catch(() => {});
+    }
+    document.getElementById('session-discard-btn')?.addEventListener('click', () => {
+      sessionBanner.style.display = 'none';
+      _pendingSessionData = null;
+      window.electronAPI?.clearSession();
+    });
+    document.getElementById('session-resume-btn')?.addEventListener('click', () => {
+      if (!_pendingSessionData) return;
+      sessionBanner.style.display = 'none';
+      // Collect current form values and resume
+      const data = {
+        animationId: animationIdTextarea ? animationIdTextarea.value : '',
+        robloxCookie: robloxCookieInput ? robloxCookieInput.value : '',
+        apiKey: document.getElementById('openCloudApiKey')?.value || '',
+        groupId: groupIdInput ? groupIdInput.value : '',
+        enableSpoofing: enableSpoofingToggle ? enableSpoofingToggle.checked : true,
+        autoDetectCookie: autoDetectCookieToggle ? autoDetectCookieToggle.checked : false,
+        spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
+        downloadOnly: downloadOnlyToggle ? downloadOnlyToggle.checked : false,
+        downloadFolder: downloadFolderInput ? downloadFolderInput.value : '',
+        resumeSession: true,
+      };
+      runSpooferBtn.disabled = true;
+      pauseBtn.style.display = 'inline-block';
+      window.electronAPI.resumeSession(data);
+    });
+
     // --- IPC for Spoofer Results from Main ---
     if (window.electronAPI && window.electronAPI.onSpooferResult) {
         window.electronAPI.onSpooferResult((result) => {
@@ -754,7 +821,8 @@
                 outputDataTextarea.value = result.output;
             }
             // Re-enable the button after operation
-            if(runSpooferBtn) runSpooferBtn.disabled = false;
+            if (runSpooferBtn) runSpooferBtn.disabled = false;
+            if (pauseBtn) { pauseBtn.style.display = 'none'; pauseBtn.textContent = '⏸ Pause'; _paused = false; }
         });
     } else {
         console.warn("electronAPI.onSpooferResult not found.");
@@ -970,6 +1038,7 @@
         runSpooferBtn.addEventListener('click', () => {
             // Disable button to prevent multiple clicks
             runSpooferBtn.disabled = true;
+            if (pauseBtn) { pauseBtn.style.display = 'inline-block'; pauseBtn.textContent = '⏸ Pause'; _paused = false; }
             updateStatus("Initiating spoofer...");
             outputDataTextarea.value = ""; // Clear previous output
 

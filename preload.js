@@ -21,6 +21,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
 
   // Open logs folder
-  openLogsFolder: () => ipcRenderer.send('open-logs-folder')
-  
+  openLogsFolder: () => ipcRenderer.send('open-logs-folder'),
+
+  // Pause / Resume
+  pauseSpoofer: () => ipcRenderer.send('spoofer-pause'),
+  resumeSpoofer: () => ipcRenderer.send('spoofer-resume'),
+
+  // Session (crash recovery)
+  checkSession: () => ipcRenderer.invoke('check-session'),
+  clearSession: () => ipcRenderer.send('clear-session'),
+  resumeSession: (data) => ipcRenderer.send('run-spoofer-action', { ...data, resumeSession: true }),
 });

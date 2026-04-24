@@ -8,6 +8,25 @@ const { clearDownloadsDirectory, retryAsync, sanitizeFilename } = require('./com
 const { downloadAnimationAssetWithProgress, publishAnimationRbxmWithProgress } = require('./transfer-handlers');
 const fs = require('fs').promises;
 
+// ── Pause / Resume ────────────────────────────────────────────────────────────
+let _isPaused = false;
+let _pauseResolvers = [];
+function pauseSpoofer() { _isPaused = true; }
+function resumeSpoofer() { _isPaused = false; _pauseResolvers.splice(0).forEach(r => r()); }
+async function checkPaused() {
+  if (_isPaused) await new Promise(resolve => _pauseResolvers.push(resolve));
+}
+
+// ── Session (crash recovery) ──────────────────────────────────────────────────
+function getSessionPath() { return path.join(app.getPath('userData'), 'ispoofer_session.json'); }
+async function saveSession(session) {
+  try { await fs.writeFile(getSessionPath(), JSON.stringify(session)); } catch {}
+}
+async function loadSession() {
+  try { return JSON.parse(await fs.readFile(getSessionPath(), 'utf8')); } catch { return null; }
+}
+async function clearSession() { await fs.unlink(getSessionPath()).catch(() => {}); }
+
 /**
  * Registers all IPC handlers for main process
  */
@@ -51,6 +70,11 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
   ipcMain.on('run-spoofer-action', async (event, data) => {
     await handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, sendSpooferResultToRenderer, sendStatusMessage);
   });
+
+  ipcMain.on('spoofer-pause', () => { pauseSpoofer(); sendStatusMessage('Paused'); });
+  ipcMain.on('spoofer-resume', () => { resumeSpoofer(); sendStatusMessage('Resuming...'); });
+  ipcMain.handle('check-session', () => loadSession());
+  ipcMain.on('clear-session', () => clearSession());
 
   ipcMain.handle('fetch-audio-quota', async (event, data) => {
     try {
@@ -117,15 +141,25 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
  * Main spoofer action handler
  */
 async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, sendSpooferResultToRenderer, sendStatusMessage) {
+  // Always reset pause state at the start of a new run so a previously-paused
+  // run that was interrupted can't block the next one.
+  resumeSpoofer();
+
   if (DEVELOPER_MODE) {
-    // Sanitize sensitive data before logging
     const sanitizedData = { ...data };
-    if (sanitizedData.robloxCookie) {
-      sanitizedData.robloxCookie = '{Cookie:Here}';
-    }
+    if (sanitizedData.robloxCookie) sanitizedData.robloxCookie = '{Cookie:Here}';
     console.log('MAIN_PROCESS (Dev): Received run-spoofer-action with data:', sanitizedData);
   } else {
     console.log('MAIN_PROCESS: Received run-spoofer-action.');
+  }
+
+  // If this is a resume, restore the original textarea input from the session file
+  // BEFORE parsing, so that entries are available even if the textarea is empty after a crash.
+  if (data.resumeSession === true) {
+    const savedSession = await loadSession();
+    if (savedSession && savedSession.animationIdInput) {
+      data.animationId = savedSession.animationIdInput;
+    }
   }
 
   const hasCustomDownloadFolder = !!(data.downloadOnly && data.downloadFolder && data.downloadFolder.trim());
@@ -241,10 +275,33 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     return;
   }
 
+  // ── Session setup (crash recovery + resume) ──────────────────────────────
+  const isResume = data.resumeSession === true;
+  let session = isResume ? await loadSession() : null;
+  if (isResume && session) {
+    // Filter to only assets not yet completed in the prior session
+    const completedIds = new Set((session.completedMappings || []).map(m => m.originalId));
+    animationEntries.splice(0, animationEntries.length,
+      ...animationEntries.filter(e => !completedIds.has(String(e.id))));
+    sendSpooferResultToRenderer({ output: `Resuming — ${animationEntries.length} asset(s) remaining from previous session.\n`, success: true });
+  } else {
+    session = {
+      sessionId: crypto.randomUUID(),
+      startedAt: new Date().toISOString(),
+      mode: isSoundMode ? 'Audio' : 'Animation',
+      animationIdInput: data.animationId, // stored so resume works even if textarea is empty after crash
+      totalCount: animationEntries.length,
+      completedMappings: [],
+    };
+    await saveSession(session);
+  }
+
   let verboseOutputMessage = `Processing ${animationEntries.length} ${isSoundMode ? 'sound' : 'animation'}(s)...\n`;
   let successfulUploadCount = 0;
   let downloadedSuccessfullyCount = 0;
-  let uploadMappingOutput = '';
+  // Seed mappings from prior completed session work
+  let uploadMappingOutput = (session.completedMappings || []).map(m => `${m.originalId} = ${m.newId},`).join('\n');
+  if (uploadMappingOutput) uploadMappingOutput += '\n';
 
   const initialTransferStates = [];
   for (const entry of animationEntries) {
@@ -511,7 +568,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   const DOWNLOAD_TIMEOUT_MS = parseInt(data.downloadTimeoutMs, 10) || 15000;
 
   // Parallel downloads
-  sendStatusMessage('Downloading animations...');
+  sendStatusMessage(`Downloading ${isSoundMode ? 'sounds' : 'animations'}...`);
   let downloadCompleted = 0;
   const downloadStartTime = Date.now();
   const downloadPromises = animationEntries.map(async (entry) => {
@@ -582,8 +639,26 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     let uploadCompleted = 0;
     const uploadStartTime = Date.now();
     const successfulDownloads = downloadResults.filter((r) => r.success);
-    // Open Cloud API rate limit is 60 requests/min — cap upload concurrency
-    const UPLOAD_CONCURRENCY = Math.min(6, successfulDownloads.length);
+    // Open Cloud API rate limit is 60 req/min. With ~10s average async processing,
+    // 10 concurrent slots stays safely under the limit.
+    const UPLOAD_CONCURRENCY = Math.min(10, successfulDownloads.length);
+
+    // Worker pool: as soon as a slot finishes it picks up the next item immediately,
+    // instead of waiting for a whole batch to finish before starting the next.
+    const runWithConcurrency = async (items, limit, worker) => {
+      const results = new Array(items.length);
+      let index = 0;
+      const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+        while (true) {
+          const current = index++;
+          if (current >= items.length) break;
+          results[current] = await worker(items[current]);
+        }
+      });
+      await Promise.all(workers);
+      return results;
+    };
+
     const uploadOne = async (downloadResult) => {
     const entry = downloadResult.entry;
     const filePath = downloadResult.filePath;
@@ -614,9 +689,17 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         error: err.message.substring(0, 120),
       });
     };
-    const uploadFn = () => publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, data.apiKey || null, authenticatedUserId || null);
+    const uploadFn = async () => {
+      await checkPaused();
+      return publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, data.apiKey || null, authenticatedUserId || null);
+    };
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);
+      // Save progress after each successful upload
+      if (uploadResult.success && uploadResult.assetId) {
+        session.completedMappings.push({ originalId: String(entry.id), newId: uploadResult.assetId });
+        await saveSession(session);
+      }
       uploadCompleted++;
       const elapsed = (Date.now() - uploadStartTime) / 1000;
       const avgTimePerItem = elapsed / uploadCompleted;
@@ -641,11 +724,7 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
       return { entry, success: false, error: finalRetryError.message };
     }
   };
-    for (let i = 0; i < successfulDownloads.length; i += UPLOAD_CONCURRENCY) {
-      const batch = successfulDownloads.slice(i, i + UPLOAD_CONCURRENCY);
-      const batchResults = await Promise.all(batch.map(uploadOne));
-      uploadResults.push(...batchResults);
-    }
+    uploadResults = await runWithConcurrency(successfulDownloads, UPLOAD_CONCURRENCY, uploadOne);
   }
 
   // Process results
@@ -781,6 +860,9 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   } catch {}
 
   sendSpooferResultToRenderer({ output: finalOutput, success: downloadedSuccessfullyCount > 0 || successfulUploadCount > 0 });
+
+  // Clear session on completion (all done or all failed — no point resuming)
+  await clearSession();
 
   // Clear downloads directory after operation completes (only if using temp directory, not user-selected folder)
   if (!data.downloadOnly) {
