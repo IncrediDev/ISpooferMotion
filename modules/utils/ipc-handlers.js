@@ -189,6 +189,12 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     return;
   }
 
+  // Validate group ID is numeric if provided
+  if (data.groupId && !/^\d+$/.test(String(data.groupId).trim())) {
+    sendSpooferResultToRenderer({ output: `Invalid Group ID "${data.groupId}" — must be a number only, not a URL or text.`, success: false });
+    return;
+  }
+
   // Both animation and sound uploads require an Open Cloud API key
   if (!data.downloadOnly && !data.apiKey) {
     sendSpooferResultToRenderer({
@@ -283,6 +289,16 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     const completedIds = new Set((session.completedMappings || []).map(m => m.originalId));
     animationEntries.splice(0, animationEntries.length,
       ...animationEntries.filter(e => !completedIds.has(String(e.id))));
+
+    if (animationEntries.length === 0) {
+      // All assets were already completed — just show the saved mappings and finish
+      const mappingOutput = (session.completedMappings || []).map(m => `${m.originalId} = ${m.newId},`).join('\n');
+      sendSpooferResultToRenderer({ output: mappingOutput.replace(/,$/, ''), success: true });
+      sendStatusMessage('Session already complete');
+      await clearSession();
+      return;
+    }
+
     sendSpooferResultToRenderer({ output: `Resuming — ${animationEntries.length} asset(s) remaining from previous session.\n`, success: true });
   } else {
     session = {
@@ -319,7 +335,6 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
   initialTransferStates.forEach((state) => sendTransferUpdate(state));
 
   const totalAnimations = animationEntries.length;
-  let processedCount = 0;
   try {
     sendStatusMessage(`0/${totalAnimations} spoofed`);
   } catch (e) {
@@ -347,29 +362,27 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     if (DEVELOPER_MODE) console.log(`(Dev) Found ${animationEntries.length > 0 ? [...new Set(animationEntries.map(e => `${e.creatorType}:${e.creatorId}`))].length : 0} unique creators. Fetching placeIds (max ${maxPlaceIds} per creator, ${maxPlaceIdRetries} retries)...`);
     
     const uniqueCreators = [...new Set(animationEntries.map(e => `${e.creatorType}:${e.creatorId}`))];
-    for (const creatorKey of uniqueCreators) {
+    if (DEVELOPER_MODE) console.log(`(Dev) Fetching placeIds for ${uniqueCreators.length} creator(s) in parallel...`);
+
+    await Promise.all(uniqueCreators.map(async (creatorKey) => {
       const [creatorType, creatorId] = creatorKey.split(':');
       try {
-        if (DEVELOPER_MODE) console.log(`(Dev) Attempting to get placeIds for ${creatorType} ${creatorId}...`);
         const placeIds = await retryAsync(
           () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie, maxPlaceIds),
           maxPlaceIdRetries,
           1000,
           (attempt, max, err) => {
-            if (DEVELOPER_MODE) console.warn(`(Dev) Attempt ${attempt}/${max} to get placeIds for ${creatorKey} failed: ${err.message}`);
+            if (DEVELOPER_MODE) console.warn(`(Dev) Attempt ${attempt}/${max} for ${creatorKey}: ${err.message}`);
           }
         );
-        // Ensure it's an array
         placeIdMap[creatorKey] = Array.isArray(placeIds) ? placeIds : [placeIds];
-        if (DEVELOPER_MODE) console.log(`(Dev) Successfully got ${placeIdMap[creatorKey].length} placeIds for ${creatorKey}: ${placeIdMap[creatorKey].join(', ')}`);
+        if (DEVELOPER_MODE) console.log(`(Dev) Got ${placeIdMap[creatorKey].length} placeIds for ${creatorKey}`);
       } catch (error) {
-        if (DEVELOPER_MODE) console.warn(`(Dev) Could not get placeIds for ${creatorKey} (will use fallback): ${error.message}`);
-        console.log(`[ERROR] Failed to fetch real place IDs for ${creatorKey}. Using fallback: 99840799534728`);
-        placeIdMap[creatorKey] = [99840799534728]; // Temporary hardcoded fallback as array
+        if (DEVELOPER_MODE) console.warn(`(Dev) Could not get placeIds for ${creatorKey}: ${error.message}`);
+        placeIdMap[creatorKey] = [99840799534728];
       }
-    }
+    }));
 
-    // Debug: show the resolved placeId map once fetched
     if (DEVELOPER_MODE) console.log('(Dev) Resolved placeIdMap:', placeIdMap);
 
   }
@@ -676,9 +689,10 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     const onRetryAttempt = (attempt, maxAttempts, err) => {
       const errMsg = err.message || '';
       const isRateLimit = errMsg.includes('429') || errMsg.includes('Rate limit');
-      const logMsg = isRateLimit 
-        ? `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} rate-limited (429). Retrying with delay...`
-        : `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} failed. Retrying...`;
+      const isFinal = attempt >= maxAttempts;
+      const logMsg = isRateLimit
+        ? `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} rate-limited (429).${isFinal ? ' No more retries.' : ' Retrying with delay...'}`
+        : `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} failed.${isFinal ? ' No more retries.' : ' Retrying...'}`;
       if (DEVELOPER_MODE && isRateLimit) {
         console.warn(`(Dev) [RATE LIMIT DETECTED] ${entry.name}: ${errMsg}`);
       }
@@ -686,12 +700,14 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
         id: uploadTransferId,
         status: 'processing',
         message: logMsg,
-        error: err.message.substring(0, 120),
+        error: errMsg.substring(0, 120),
       });
     };
     const uploadFn = async () => {
       await checkPaused();
-      return publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, data.apiKey || null, authenticatedUserId || null);
+      const result = await publishAnimationRbxmWithProgress(filePath, entry.name, robloxCookie, csrfToken, data.groupId && String(data.groupId).trim() ? data.groupId : null, uploadTransferId, sendTransferUpdate, assetTypeName, data.apiKey || null, authenticatedUserId || null);
+      if (!result.success) throw new Error(result.error || 'Upload failed');
+      return result;
     };
     try {
       const uploadResult = await retryAsync(uploadFn, UPLOAD_RETRIES, UPLOAD_RETRY_DELAY_MS, onRetryAttempt);

@@ -106,16 +106,9 @@ async function getCsrfToken(cookie) {
  * Gets the rootPlace from each game the creator owns
  */
 async function getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds = 10) {
-  // Clamp maxPlaceIds to valid Roblox API values: 10, 25, 50
-  const validLimits = [10, 25, 50];
-  let limit = validLimits[0];
-  if (maxPlaceIds >= 50) {
-    limit = 50;
-  } else if (maxPlaceIds >= 25) {
-    limit = 25;
-  } else {
-    limit = 10;
-  }
+  // Always use the maximum page size to minimise HTTP round-trips.
+  // We slice to maxPlaceIds at the end anyway, so over-fetching is fine.
+  const limit = 50;
 
   async function getGamesPage(url) {
     const cookieHeader = buildRobloxCookieHeader(cookie);

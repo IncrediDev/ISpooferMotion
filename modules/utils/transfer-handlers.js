@@ -59,10 +59,15 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
     sendTransferUpdate({ id: transferId, size: isNaN(totalSize) ? 0 : totalSize });
     const reader = response.body.getReader();
     fileStream = fsSync.createWriteStream(filePath);
+    // Attach error listener immediately — before any writes — so stream errors
+    // during the write loop don't become uncaught exceptions.
+    let earlyStreamError = null;
+    fileStream.on('error', (err) => { earlyStreamError = err; });
     let receivedLength = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (earlyStreamError) throw earlyStreamError;
       fileStream.write(value);
       receivedLength += value.length;
       if (totalSize > 0) {
@@ -73,10 +78,11 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
         }
       }
     }
+    if (earlyStreamError) throw earlyStreamError;
     fileStream.end();
     await new Promise((resolve, reject) => {
-      fileStream.on('finish', resolve);
-      fileStream.on('error', (err) => reject(new Error(`File stream error: ${err.message}`)));
+      fileStream.once('finish', resolve);
+      fileStream.once('error', (err) => reject(new Error(`File stream error: ${err.message}`)));
     });
     if (lastReportedProgress < 100 && totalSize > 0) sendTransferUpdate({ id: transferId, progress: 100 });
     sendTransferUpdate({ id: transferId, status: 'completed', progress: 100 });
@@ -112,12 +118,6 @@ async function downloadAnimationAssetWithProgress(url, robloxCookie, filePath, t
  * Publishes an animation or sound RBXM file to Roblox
  */
 async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToken, groupId = null, transferId, sendTransferUpdate, assetTypeName = 'Animation', apiKey = null, userId = null) {
-  const cookieHeader = buildRobloxCookieHeader(cookie);
-  if (!cookieHeader) {
-    sendTransferUpdate({ id: transferId, name, status: 'error', direction: 'upload', error: 'Missing or invalid ROBLOSECURITY cookie' });
-    return { success: false, error: 'Missing or invalid ROBLOSECURITY cookie' };
-  }
-
   let fileBuffer;
   let fileSize = 0;
   try {
@@ -154,7 +154,8 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
 
   const assetType = isAudio ? 'Audio' : 'Animation';
   const fileType = isAudio ? 'audio/ogg' : 'model/x-rbxm';
-  const fileName = isAudio ? 'audio.ogg' : 'animation.rbxm';
+  const safeNameBase = (name || 'asset').replace(/[<>:"/\\|?*\r\n]/g, '_').substring(0, 100);
+  const fileName = isAudio ? `${safeNameBase}.ogg` : `${safeNameBase}.rbxm`;
 
   const requestMetadata = {
     assetType,
@@ -236,11 +237,16 @@ async function publishAnimationRbxmWithProgress(filePath, name, cookie, csrfToke
         });
         const pollData = await pollResp.json();
         if (DEVELOPER_MODE) console.log(`[UPLOAD DEBUG] Poll attempt ${attempt}/${maxPollAttempts}: done=${pollData.done}`);
-        if (pollData.done && pollData.response) {
-          const assetId = pollData.response.assetId || pollData.response.Id;
-          if (assetId) {
-            sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
-            return { success: true, assetId: String(assetId) };
+        if (pollData.done) {
+          if (pollData.error) {
+            throw new Error(`Roblox rejected the upload: ${pollData.error.message || JSON.stringify(pollData.error)}`);
+          }
+          if (pollData.response) {
+            const assetId = pollData.response.assetId || pollData.response.Id;
+            if (assetId) {
+              sendTransferUpdate({ id: transferId, progress: 100, status: 'completed', newAssetId: String(assetId) });
+              return { success: true, assetId: String(assetId) };
+            }
           }
         }
       }

@@ -2,7 +2,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const DEVELOPER_MODE = true;
+const DEVELOPER_MODE = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 const KEEP_DOWNLOADS_ON_FAILURE = false; // Set to false to delete downloads
 const LOG_TO_FILE = true; // Set to true to log all console output to a .txt file
 

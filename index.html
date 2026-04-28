@@ -467,7 +467,7 @@
 
     <div class="form-group">
       <label for="robloxCookie">Roblox Cookie</label>
-      <input type="text" id="robloxCookie" name="robloxCookie" placeholder="Enter .ROBLOSECURITY cookie">
+      <input type="text" id="robloxCookie" name="robloxCookie" autocomplete="off" placeholder="Enter .ROBLOSECURITY cookie">
     </div>
 
     <div class="form-group" id="api-key-group">
@@ -475,7 +475,7 @@
         Open Cloud API Key
         <span class="tooltip-icon" title="Required for animation and sound uploads. Go to create.roblox.com → Open Cloud → API Keys. Create a key and enable 'Assets' with Read & Write access.">?</span>
       </label>
-      <input type="text" id="openCloudApiKey" name="openCloudApiKey" placeholder="Enter your Open Cloud API Key (required for animations)">
+      <input type="text" id="openCloudApiKey" name="openCloudApiKey" autocomplete="off" placeholder="Enter your Open Cloud API Key (required for animations)">
     </div>
 
     <div class="form-group">
@@ -744,7 +744,7 @@
   const discordBtn = document.getElementById('discord-btn');
   if (discordBtn) {
     discordBtn.addEventListener('click', () => {
-      const invite = 'https://discord.gg/vfVdm9q8SV';
+      const invite = 'https://discord.gg/ispoofermotion';
       if (window.electronAPI && window.electronAPI.openExternal) {
         window.electronAPI.openExternal(invite);
       } else {
@@ -842,11 +842,19 @@
 
     // --- Copy Output Button ---
     if (copyOutputBtn && outputDataTextarea) {
-        copyOutputBtn.addEventListener('click', () => {
-          outputDataTextarea.select();
-            try { document.execCommand('copy'); updateStatus("Output copied!"); }
-            catch (err) { console.error('Fallback: Oops, unable to copy', err); updateStatus("Failed to copy output.");}
-            window.getSelection().removeAllRanges();
+        copyOutputBtn.addEventListener('click', async () => {
+            const text = outputDataTextarea.value;
+            if (!text) return;
+            try {
+                await navigator.clipboard.writeText(text);
+                updateStatus("Output copied!");
+            } catch (err) {
+                // Fallback for environments where clipboard API is unavailable
+                outputDataTextarea.select();
+                try { document.execCommand('copy'); updateStatus("Output copied!"); }
+                catch (e) { updateStatus("Failed to copy output."); }
+                window.getSelection().removeAllRanges();
+            }
         });
     }
 
