@@ -1,0 +1,18 @@
+{
+  "name": "ispoofermotion-launcher",
+  "version": "1.0.0",
+  "description": "External launcher/updater for ISpooferMotion official releases.",
+  "main": "launcher.js",
+  "license": "GPL-3.0-or-later",
+  "bin": "launcher.js",
+  "scripts": {
+    "start": "node launcher.js",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build:win": "node ./build.js",
+    "build:exe": "node ./build.js"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "6.19.0",
+    "rcedit": "5.0.2"
+  }
+}

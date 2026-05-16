@@ -1,0 +1,35 @@
+name: Build Launcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'launcher/**'
+      - '.github/workflows/build-launcher.yml'
+
+jobs:
+  build-launcher:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install launcher dependencies
+        working-directory: launcher
+        run: npm install
+
+      - name: Build launcher exe
+        working-directory: launcher
+        run: npm run build:win
+
+      - name: Upload launcher artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ISpooferMotion
+          path: launcher/dist/ISpooferMotion.exe

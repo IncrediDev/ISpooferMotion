@@ -1,4 +1,13 @@
 
+# Fork note: external auto-updater
+
+This fork includes a separate launcher in `launcher/`. You need to run the launcher (Shortcut on desktop), not the app directly. The launcher stays separate and downloads/launches the latest official `IncrediDev/ISpooferMotion` release, so official app updates do not remove the launcher code.
+
+See `FORK_NOTES.md` for more details.
+
+---
+
+
 
 # [ISM] Audio & Animation Spoofing
 
