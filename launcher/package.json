@@ -7,8 +7,8 @@
   "scripts": {
     "start": "electron .",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build:win": "electron-builder --win nsis --publish never",
-    "build:setup": "electron-builder --win nsis --publish never"
+    "build:win": "node build-setup.js",
+    "build:setup": "node build-setup.js"
   },
   "devDependencies": {
     "electron": "^36.2.1",
@@ -16,21 +16,23 @@
   },
   "build": {
     "appId": "com.github.IncrediDev.ISpooferMotion.Launcher",
-    "productName": "ISpooferMotion",
+    "productName": "ISpooferMotion Launcher",
     "artifactName": "ISpooferMotion-Setup.exe",
     "files": [
       "main.js",
       "preload.js",
       "index.html",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "build-setup.js"
     ],
     "directories": {
       "output": "dist"
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/app_icon.ico"
+      "icon": "assets/app_icon.ico",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": true,
@@ -39,9 +41,13 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ISpooferMotion",
+      "shortcutName": "ISpooferMotion Launcher",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false
-    }
-  }
+    },
+    "forceCodeSigning": false,
+    "nodeGypRebuild": false
+  },
+  "author": "IncrediDev and contributors",
+  "productName": "ISpooferMotion Launcher"
 }

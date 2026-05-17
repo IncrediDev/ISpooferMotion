@@ -8,15 +8,31 @@ const https = require('https');
 const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
-const OWNER = 'IncrediDev';
-const REPO = 'ISpooferMotion';
-const API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
+const RELEASE_SOURCES = {
+  official: {
+    id: 'official',
+    label: 'Official',
+    owner: 'IncrediDev',
+    repo: 'ISpooferMotion',
+    url: 'https://github.com/IncrediDev/ISpooferMotion'
+  },
+  fork: {
+    id: 'fork',
+    label: 'Fork',
+    owner: 'codycon',
+    repo: 'ISpooferMotion',
+    url: 'https://github.com/codycon/ISpooferMotion'
+  }
+};
+const DEFAULT_RELEASE_SOURCE_ID = 'official';
 const USER_AGENT = 'ISpooferMotion-Electron-Launcher/1.2.16 (+https://github.com/IncrediDev/ISpooferMotion)';
 const REQUEST_TIMEOUT_MS = 30000;
 const DOWNLOAD_TIMEOUT_MS = 90000;
 const MAX_REDIRECTS = 5;
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024;
+const LAUNCHER_VERSION = app.getVersion();
+const LAUNCHER_VERSION_LABEL = LAUNCHER_VERSION.startsWith('v') ? LAUNCHER_VERSION : `v${LAUNCHER_VERSION}`;
 const ALLOWED_DOWNLOAD_HOSTS = new Set([
   'github.com',
   'api.github.com',
@@ -44,7 +60,8 @@ function getPaths() {
     installersDir: path.join(rootDir, 'installers'),
     runDir: path.join(rootDir, 'run'),
     stateFile: path.join(rootDir, 'state.json'),
-    logFile: path.join(rootDir, 'launcher.log')
+    logFile: path.join(rootDir, 'launcher.log'),
+    sourceFile: path.join(rootDir, 'release-source.json')
   };
   return paths;
 }
@@ -55,6 +72,41 @@ function ensureDirs() {
   fs.mkdirSync(p.versionsDir, { recursive: true });
   fs.mkdirSync(p.installersDir, { recursive: true });
   fs.mkdirSync(p.runDir, { recursive: true });
+}
+
+
+function normalizeReleaseSourceId(sourceId) {
+  const id = String(sourceId || '').trim().toLowerCase();
+  return RELEASE_SOURCES[id] ? id : DEFAULT_RELEASE_SOURCE_ID;
+}
+
+function readReleaseSourceId() {
+  const p = getPaths();
+  const saved = readJson(p.sourceFile, null);
+  if (saved && saved.sourceId) return normalizeReleaseSourceId(saved.sourceId);
+  const state = readJson(p.stateFile, {});
+  return normalizeReleaseSourceId(state.sourceId);
+}
+
+function getReleaseSource(sourceId = null) {
+  return RELEASE_SOURCES[normalizeReleaseSourceId(sourceId || readReleaseSourceId())];
+}
+
+function getReleaseApiUrl(source) {
+  return `https://api.github.com/repos/${source.owner}/${source.repo}/releases/latest`;
+}
+
+function writeReleaseSourceId(sourceId) {
+  ensureDirs();
+  const source = getReleaseSource(sourceId);
+  writeJson(getPaths().sourceFile, {
+    sourceId: source.id,
+    label: source.label,
+    repo: `${source.owner}/${source.repo}`,
+    url: source.url,
+    updatedAt: new Date().toISOString()
+  });
+  return source;
 }
 
 function writeLog(message) {
@@ -513,31 +565,26 @@ function isLauncherAssetName(name) {
 }
 
 function chooseWindowsAppAsset(assets) {
-  const usable = (assets || []).filter(asset => {
+  const candidates = (assets || []).filter(asset => {
     if (!asset || !asset.browser_download_url || !asset.name) return false;
     const name = String(asset.name);
     if (/\.yml$|\.blockmap$|\.rbxmx$/i.test(name)) return false;
     if (/mac|darwin|linux/i.test(name)) return false;
     if (!/\.(exe|zip)$/i.test(name)) return false;
-    if (isLauncherAssetName(name)) return false;
-    return /win|windows|app|portable|setup|installer|install|ispoofer|motion/i.test(name);
+    if (isLauncherAssetName(name) || isSetupOrInstallerAssetName(name)) return false;
+    return /win|windows|app|portable|ispoofer|motion/i.test(name);
   });
 
-  const directAppCandidates = usable.filter(asset => !isSetupOrInstallerAssetName(asset.name));
-  directAppCandidates.sort((a, b) => scoreReleaseAsset(b.name) - scoreReleaseAsset(a.name));
-  if (directAppCandidates[0]) return directAppCandidates[0];
-
-  // Non-launcher setup EXEs are accepted only as a fallback payload.
-  const setupCandidates = usable.filter(asset => isSetupOrInstallerAssetName(asset.name));
-  setupCandidates.sort((a, b) => scoreSetupPayloadAsset(b.name) - scoreSetupPayloadAsset(a.name));
-  return setupCandidates[0] || null;
+  candidates.sort((a, b) => scoreReleaseAsset(b.name) - scoreReleaseAsset(a.name));
+  return candidates[0] || null;
 }
 
 function chooseRejectedWindowsInstallerAsset(assets) {
   return (assets || []).find(asset => {
     if (!asset || !asset.browser_download_url || !asset.name) return false;
     const name = String(asset.name);
-    return /\.(exe|zip)$/i.test(name) && isLauncherAssetName(name);
+    if (!/\.(exe|zip)$/i.test(name)) return false;
+    return isSetupOrInstallerAssetName(name) || isLauncherAssetName(name);
   }) || null;
 }
 
@@ -926,7 +973,7 @@ function launchExe(exePath) {
   });
 }
 
-async function installRelease(release, asset, pluginInfo = null) {
+async function installRelease(release, asset, pluginInfo = null, source = getReleaseSource()) {
   const p = getPaths();
   const tag = release.tag_name || release.name || 'latest';
   const safeTag = sanitizeFileName(tag.replace(/[^a-z0-9_.-]/gi, '_'));
@@ -960,18 +1007,12 @@ async function installRelease(release, asset, pluginInfo = null) {
     if (!exePath) throw new Error('No ISpooferMotion app executable was found after extracting the release package.');
   } else if (/\.exe$/i.test(asset.name)) {
     if (isSetupOrInstallerAssetName(asset.name)) {
-      const setupResult = await runWindowsSetupSilently(downloadPath, versionDir);
-      installedDir = setupResult.installDir || setupResult;
-      exePath = setupResult.exePath || findExe(installedDir);
-      if (!exePath) {
-        throw new Error('No ISpooferMotion app executable was found after running the app setup package.');
-      }
-    } else {
-      installedDir = getUniqueInstallDir(versionDir);
-      fs.mkdirSync(installedDir, { recursive: true });
-      exePath = path.join(installedDir, safeAssetName);
-      await copyFileWithRetry(downloadPath, exePath);
+      throw new Error('Setup installers cannot be used as managed app payloads. Upload the portable app EXE from the release workflow.');
     }
+    installedDir = getUniqueInstallDir(versionDir);
+    fs.mkdirSync(installedDir, { recursive: true });
+    exePath = path.join(installedDir, safeAssetName);
+    await copyFileWithRetry(downloadPath, exePath);
   } else {
     throw new Error(`Unsupported app asset type: ${asset.name}`);
   }
@@ -987,6 +1028,10 @@ async function installRelease(release, asset, pluginInfo = null) {
     assetName: asset.name,
     assetDigest: asset.digest || null,
     assetSha256: expectedSha256,
+    sourceId: source.id,
+    sourceLabel: source.label,
+    sourceRepo: `${source.owner}/${source.repo}`,
+    sourceUrl: source.url,
     exePath,
     updatedAt: new Date().toISOString()
   };
@@ -1001,11 +1046,12 @@ async function runUpdateFlow() {
   ensureDirs();
   try {
     await cleanupLegacyFolders();
-    sendStatus({ level: 'info', message: 'Checking for updates...' });
+    const source = getReleaseSource();
+    sendStatus({ level: 'info', message: 'Checking for updates...', detail: `${source.label} — ${source.owner}/${source.repo}` });
     const state = readJson(getPaths().stateFile, {});
     let release;
     try {
-      release = await requestJson(API_URL);
+      release = await requestJson(getReleaseApiUrl(source));
     } catch (err) {
       sendStatus({ level: 'warn', message: `Update check failed: ${err.message}` });
       if (isAllowedAppPath(state.exePath)) {
@@ -1022,10 +1068,8 @@ async function runUpdateFlow() {
     const pluginAsset = chooseRobloxPluginAsset(release.assets);
     if (!asset) {
       const rejectedInstaller = chooseRejectedWindowsInstallerAsset(release.assets);
-      const installerHint = rejectedInstaller
-        ? ` Found ${rejectedInstaller.name}, but it looks like the launcher installer, not the managed app payload.`
-        : '';
-      throw new Error(`No managed Windows app .exe, setup .exe, or .zip was found on the latest official release.${installerHint} Upload the official Windows app EXE plus the .rbxmx plugin asset.`);
+      const foundText = rejectedInstaller ? ` Found ${rejectedInstaller.name}, but setup installers cannot be used as managed app payloads.` : '';
+      throw new Error(`The selected release does not include the app payload yet.${foundText} Use the fork source or wait for the official ${LAUNCHER_VERSION_LABEL} release.`);
     }
 
     let pluginInfo = null;
@@ -1042,9 +1086,9 @@ async function runUpdateFlow() {
     }
 
     let exePath = state.exePath;
-    if (state.tag !== latestTag || state.assetName !== asset.name || !isAllowedAppPath(exePath)) {
+    if (state.sourceId !== source.id || state.tag !== latestTag || state.assetName !== asset.name || !isAllowedAppPath(exePath)) {
       sendStatus({ level: 'info', message: `Latest version: ${latestTag}` });
-      exePath = await installRelease(release, asset, pluginInfo);
+      exePath = await installRelease(release, asset, pluginInfo, source);
     } else {
       if (pluginInfo) writeJson(getPaths().stateFile, { ...state, ...pluginInfo });
       sendStatus({ level: 'success', message: `Already up to date: ${latestTag}` });
@@ -1095,7 +1139,174 @@ async function removeInstalledPlugins() {
   return removed;
 }
 
-function scheduleUserDataRemoval() {
+function quotePs(value) {
+  return `'${String(value || '').replace(/'/g, "''")}'`;
+}
+
+function collectDeepUninstallTargets() {
+  const targets = [
+    getPaths().rootDir,
+    ...getLegacyUserDataDirs(),
+    ...getStandardAppInstallDirs(),
+    ...getShortcutAndTempCleanupTargets()
+  ];
+
+  if (app.isPackaged) {
+    try { targets.push(path.dirname(app.getPath('exe'))); } catch {}
+  }
+
+  return [...new Set(targets.filter(Boolean))];
+}
+
+function collectPluginCleanupTargets() {
+  const targets = [];
+  if (process.platform !== 'win32') return targets;
+  let pluginDir;
+  try { pluginDir = getRobloxPluginsDir(); } catch { return targets; }
+  const state = readJson(getPaths().stateFile, {});
+  if (state.pluginPath) targets.push(state.pluginPath);
+  try {
+    for (const name of fs.readdirSync(pluginDir)) {
+      if (/ispoofermotion.*\.rbxmx$/i.test(name) || /ispoofer.*plugin.*\.rbxmx$/i.test(name)) {
+        targets.push(path.join(pluginDir, name));
+      }
+    }
+  } catch {}
+  return [...new Set(targets.filter(Boolean))];
+}
+
+function startDeepCleanupAfterExit({ targets, pluginTargets, uninstaller }) {
+  if (process.platform !== 'win32') return false;
+  const targetArray = (targets || []).map(quotePs).join(',');
+  const pluginArray = (pluginTargets || []).map(quotePs).join(',');
+  const uninstallerValue = uninstaller ? quotePs(uninstaller) : '$null';
+  const currentPid = process.pid;
+
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+$launcherPid = ${currentPid}
+$targets = @(${targetArray}) | Where-Object { $_ }
+$pluginTargets = @(${pluginArray}) | Where-Object { $_ }
+$uninstaller = ${uninstallerValue}
+
+function Normalize-Path([string]$value) {
+  try { return [System.IO.Path]::GetFullPath($value).TrimEnd('\\') } catch { return $value }
+}
+
+function Path-IsUnderAnyTarget([string]$path, [object[]]$roots) {
+  if (-not $path) { return $false }
+  $full = Normalize-Path $path
+  foreach ($root in $roots) {
+    if (-not $root) { continue }
+    $cleanRoot = Normalize-Path $root
+    if ($full.Equals($cleanRoot, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($full.StartsWith($cleanRoot + '\\', [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+function Stop-ISpooferMotionProcesses([object[]]$roots) {
+  Get-CimInstance Win32_Process | Where-Object {
+    $_.ProcessId -ne $PID -and
+    $_.ProcessId -ne $launcherPid -and
+    -not ($_.ExecutablePath -and $_.ExecutablePath -like '*Roblox Studio*') -and
+    (
+      $_.Name -like '*ISpooferMotion*' -or
+      ($_.ExecutablePath -and $_.ExecutablePath -like '*ISpooferMotion*') -or
+      (Path-IsUnderAnyTarget $_.ExecutablePath $roots)
+    )
+  } | ForEach-Object {
+    try { Stop-Process -Id $_.ProcessId -Force } catch {}
+  }
+}
+
+function Register-DeleteOnReboot([string]$path) {
+  if (-not $path) { return }
+  if (-not ([System.Management.Automation.PSTypeName]'MoveFileEx.NativeMethods').Type) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace MoveFileEx {
+  public static class NativeMethods {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool MoveFileEx(string existingFileName, string newFileName, int flags);
+  }
+}
+'@ | Out-Null
+  }
+  $delayUntilReboot = 0x4
+  try {
+    if (Test-Path -LiteralPath $path -PathType Container) {
+      Get-ChildItem -LiteralPath $path -Force -Recurse | Sort-Object FullName -Descending | ForEach-Object {
+        try { [MoveFileEx.NativeMethods]::MoveFileEx($_.FullName, $null, $delayUntilReboot) | Out-Null } catch {}
+      }
+    }
+    [MoveFileEx.NativeMethods]::MoveFileEx($path, $null, $delayUntilReboot) | Out-Null
+  } catch {}
+}
+
+function Remove-PathHard([string]$path, [object[]]$roots) {
+  if (-not $path) { return }
+  for ($i = 0; $i -lt 45; $i++) {
+    if (-not (Test-Path -LiteralPath $path)) { return }
+
+    if (($i % 5) -eq 0) { Stop-ISpooferMotionProcesses $roots }
+
+    try {
+      Get-ChildItem -LiteralPath $path -Force -Recurse | ForEach-Object {
+        try { $_.Attributes = 'Normal' } catch {}
+      }
+    } catch {}
+
+    try {
+      if (Test-Path -LiteralPath $path -PathType Leaf) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+      } else {
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+      }
+    } catch {}
+
+    if (-not (Test-Path -LiteralPath $path)) { return }
+
+    if ($i -eq 18) {
+      $renamed = $path + '.delete-' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      try { Rename-Item -LiteralPath $path -NewName ([System.IO.Path]::GetFileName($renamed)) -Force -ErrorAction Stop; $path = $renamed } catch {}
+    }
+
+    Start-Sleep -Milliseconds 650
+  }
+
+  Register-DeleteOnReboot $path
+}
+
+try { Wait-Process -Id $launcherPid -Timeout 90 } catch {}
+Start-Sleep -Milliseconds 1200
+
+$allTargets = @($pluginTargets + $targets) | Where-Object { $_ } | Select-Object -Unique
+Stop-ISpooferMotionProcesses $allTargets
+Start-Sleep -Milliseconds 900
+
+if ($uninstaller -and (Test-Path -LiteralPath $uninstaller)) {
+  try { Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -Wait } catch {}
+}
+
+foreach ($path in $allTargets) {
+  Remove-PathHard $path $allTargets
+}
+`;
+
+  try {
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', script], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.unref();
+    return true;
+  } catch (err) {
+    writeLog(`WARN: Could not start delayed cleanup: ${err.message}`);
+    return false;
+  }
 }
 
 async function uninstallEverything() {
@@ -1110,27 +1321,27 @@ async function uninstallEverything() {
     sendStatus({ level: 'warn', message: 'Deep uninstalling ISpooferMotion...' });
     await closeISpooferMotionProcesses();
 
-    const removedPlugins = await removeInstalledPlugins();
-    await removeAllISpooferMotionFiles();
-
-    if (uninstaller) {
-      sendStatus({ level: 'warn', message: 'Starting launcher uninstaller...' });
-      spawn(uninstaller, ['/S'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true
-      }).unref();
+    const pluginTargets = collectPluginCleanupTargets();
+    let removedPlugins = [];
+    for (const file of pluginTargets) {
+      if (fs.existsSync(file)) {
+        await removeWithRetry(file, { force: true }, 5).catch(() => {});
+        if (!fs.existsSync(file)) removedPlugins.push(file);
+      }
     }
+
+    const targets = collectDeepUninstallTargets();
+    const scheduled = startDeepCleanupAfterExit({ targets, pluginTargets, uninstaller });
 
     sendStatus({
       level: 'success',
-      message: 'Deep uninstall complete.',
-      detail: removedPlugins.length ? `Removed ${removedPlugins.length} Roblox Studio plugin file(s).` : 'Removed app data, managed app files, shortcuts, and plugin files.'
+      message: scheduled ? 'Deep uninstall queued.' : 'Deep uninstall started.',
+      detail: removedPlugins.length ? `Removed ${removedPlugins.length} Roblox Studio plugin file(s). The rest will be cleaned after the launcher closes.` : 'Files that are locked right now will be cleaned after the launcher closes.'
     });
 
-    setTimeout(() => app.quit(), 250);
+    setTimeout(() => app.quit(), 700);
 
-    return { ok: true, removedPlugins, launcherUninstallerStarted: Boolean(uninstaller) };
+    return { ok: true, removedPlugins, delayedCleanupStarted: scheduled, launcherUninstallerStarted: Boolean(uninstaller) };
   } finally {
     running = false;
   }
@@ -1178,8 +1389,20 @@ ipcMain.handle('launcher:get-state', () => {
     running,
     rootDir: p.rootDir,
     logFile: p.logFile,
-    state: readJson(p.stateFile, {})
+    state: readJson(p.stateFile, {}),
+    source: getReleaseSource(),
+    sources: RELEASE_SOURCES
   };
+});
+ipcMain.handle('launcher:set-source', (_event, sourceId) => {
+  if (running) throw new Error('Cannot change release source while the launcher is working.');
+  const source = writeReleaseSourceId(sourceId);
+  sendStatus({
+    level: 'success',
+    message: `Release source set to ${source.label}.`,
+    detail: `${source.owner}/${source.repo}`
+  });
+  return source;
 });
 ipcMain.handle('launcher:open-log', async () => {
   ensureDirs();

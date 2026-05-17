@@ -192,6 +192,55 @@
     .status-pill.error { color: var(--red-accent); }
     .status-pill.warn { color: var(--yellow-accent); }
 
+    .source-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 12px 0 14px;
+      padding: 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      background: rgba(44,47,51,0.72);
+    }
+
+    .source-label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .source-label strong {
+      font-size: 13px;
+      color: var(--text-color);
+    }
+
+    .source-label span {
+      font-size: 12px;
+      color: var(--label-color);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #source-select {
+      min-width: 160px;
+      background: var(--input-bg);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 10px;
+      outline: none;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    #source-select:focus {
+      border-color: var(--green-accent);
+      box-shadow: 0 0 0 2px rgba(76,175,80,0.18);
+    }
+
     .progress-track {
       width: 100%;
       height: 8px;
@@ -378,6 +427,17 @@
         <div id="status-pill" class="status-pill">Launcher</div>
       </div>
 
+      <div class="source-row">
+        <label class="source-label" for="source-select">
+          <strong>Release source</strong>
+          <span id="source-detail">Official - IncrediDev/ISpooferMotion</span>
+        </label>
+        <select id="source-select">
+          <option value="official">Official - IncrediDev/ISpooferMotion</option>
+          <option value="fork">Fork - codycon/ISpooferMotion</option>
+        </select>
+      </div>
+
       <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
       <div id="progress-text"></div>
 
@@ -414,6 +474,17 @@
     const log = document.getElementById('log');
     const launchBtn = document.getElementById('launch-btn');
     const installedVersion = document.getElementById('installed-version');
+    const sourceSelect = document.getElementById('source-select');
+    const sourceDetail = document.getElementById('source-detail');
+
+    const SOURCE_DETAILS = {
+      official: 'Official - IncrediDev/ISpooferMotion',
+      fork: 'Fork - codycon/ISpooferMotion'
+    };
+
+    function updateSourceDetail(sourceId) {
+      sourceDetail.textContent = SOURCE_DETAILS[sourceId] || SOURCE_DETAILS.official;
+    }
 
     function formatBytes(bytes) {
       if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
@@ -430,6 +501,7 @@
 
     function setBusy(isBusy) {
       launchBtn.disabled = isBusy;
+      sourceSelect.disabled = isBusy;
       launchBtn.textContent = isBusy ? 'Working...' : 'Launch / Update';
     }
 
@@ -465,6 +537,17 @@
 
     window.launcherAPI.onStatus(handleStatus);
 
+    sourceSelect.addEventListener('change', async () => {
+      const selected = sourceSelect.value;
+      updateSourceDetail(selected);
+      try {
+        const source = await window.launcherAPI.setReleaseSource(selected);
+        if (source && source.id) updateSourceDetail(source.id);
+      } catch (err) {
+        handleStatus({ level: 'error', message: err && err.message ? err.message : String(err) });
+      }
+    });
+
     launchBtn.addEventListener('click', async () => {
       setBusy(true);
       progressBar.style.width = '0%';
@@ -496,10 +579,15 @@
     });
 
     window.launcherAPI.getState().then(info => {
+      const selectedSource = info && info.source && info.source.id ? info.source.id : 'official';
+      sourceSelect.value = selectedSource;
+      updateSourceDetail(selectedSource);
+
       if (info && info.state && info.state.tag) {
         installedVersion.textContent = info.state.tag;
+        const sourceLabel = info.state.sourceLabel || (info.source && info.source.label) || 'Selected source';
         statusTitle.textContent = `Installed: ${info.state.tag}`;
-        statusDetail.textContent = 'Click Launch / Update to check for a newer app EXE and Roblox Studio plugin.';
+        statusDetail.textContent = `Click Launch / Update to check ${sourceLabel} for a newer app EXE and Roblox Studio plugin.`;
         statusText.textContent = 'Ready';
         setLevel('success');
       } else {

@@ -48,7 +48,8 @@
       "target": [
         "portable"
       ],
-      "icon": "assets/app_icon.ico"
+      "icon": "assets/app_icon.ico",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": [
@@ -84,6 +85,7 @@
         }
       ]
     },
-    "artifactName": "ISpooferMotion-App-${version}-${os}-${arch}.${ext}"
+    "artifactName": "ISpooferMotion-App-${version}-${os}-${arch}.${ext}",
+    "forceCodeSigning": false
   }
 }
