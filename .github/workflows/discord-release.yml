@@ -187,12 +187,13 @@ jobs:
 
           if author["avatar"]:
               embed["author"]["icon_url"] = author["avatar"]
-              embed["thumbnail"] = {
-                  "url": author["avatar"]
-              }
 
           payload = {
               "username": "ISpooferMotion Updates",
+              "content": "@everyone ISpooferMotion has updated! 🥳",
+              "allowed_mentions": {
+                  "parse": ["everyone"]
+              },
               "embeds": [embed]
           }
 
