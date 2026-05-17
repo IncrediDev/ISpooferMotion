@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
   close: () => ipcRenderer.send('window-close'),
   onStatusUpdate: (callback) => ipcRenderer.on('update-status-message', (event, ...args) => callback(...args)),
+  onTransferUpdate: (callback) => ipcRenderer.on('transfer-update', (event, ...args) => callback(...args)),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   openExternal: (url) => ipcRenderer.send('open-external', url),
 
@@ -30,5 +31,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Session (crash recovery)
   checkSession: () => ipcRenderer.invoke('check-session'),
   clearSession: () => ipcRenderer.send('clear-session'),
+  clearAppHistory: () => ipcRenderer.invoke('clear-app-history'),
   resumeSession: (data) => ipcRenderer.send('run-spoofer-action', { ...data, resumeSession: true }),
 });

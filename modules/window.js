@@ -14,12 +14,14 @@ function createWindow() {
     : path.join(__dirname, '..', 'assets', 'app_icon.png');
   
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 800,
+    width: 1040,
+    height: 820,
+    minWidth: 860,
+    minHeight: 680,
     title: 'ISpooferMotion',
     icon: iconPath,
     frame: false,
-    resizable: false,
+    resizable: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,

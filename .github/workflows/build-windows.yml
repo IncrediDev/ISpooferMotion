@@ -1,4 +1,4 @@
-name: Build for Windows
+name: Build Windows App EXE
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  build-windows-app-exe:
     runs-on: windows-latest
 
     steps:
@@ -24,14 +24,11 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild
 
-      - name: Build Windows installer
-        run: npm run build -- --win --publish never
+      - name: Build Windows app EXE
+        run: npm run build -- --win portable --publish never
 
-      - name: Upload NSIS installer
+      - name: Upload launcher-managed app EXE
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
-          path: |
-            dist/*.exe
-            dist/latest.yml
-            dist/*.blockmap
+          name: windows-app-exe
+          path: dist/*App*.exe

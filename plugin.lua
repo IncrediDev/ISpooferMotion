@@ -1,18 +1,130 @@
--- =========================
--- Services & Environment
--- =========================
 local pluginEnvironment = script.Parent
 local assets = pluginEnvironment.Assets
 local coreGui = game:GetService("CoreGui")
+local tweenService = game:GetService("TweenService")
 local marketplace = game:GetService("MarketplaceService")
 local serverStorage = game:GetService("ServerStorage")
 local scriptEditorService = game:GetService("ScriptEditorService")
 local studioUserId = plugin:GetStudioUserId()
 
--- =========================
--- Processing State Tracking
--- =========================
+local createGetIdsUI = require(assets.GetIdsUIFactory)
+local createReplaceIdsUI = require(assets.ReplaceIdsUIFactory)
+
 local isProcessing = false
+local getIdsConnections = {}
+local replaceIdsConnections = {}
+local replaceUi = nil
+
+local function disconnectConnections(connections)
+	for _, connection in ipairs(connections) do
+		if connection and connection.Disconnect then
+			connection:Disconnect()
+		end
+	end
+	table.clear(connections)
+end
+
+
+local function getOrCreateScale(instance)
+	local scale = instance:FindFirstChildOfClass("UIScale")
+	if not scale then
+		scale = Instance.new("UIScale")
+		scale.Parent = instance
+	end
+	return scale
+end
+
+local function tween(instance, info, properties)
+	local activeTween = tweenService:Create(instance, info, properties)
+	activeTween:Play()
+	return activeTween
+end
+
+local function animatePopupOpen(ui)
+	local popup = ui:FindFirstChild("MainPopup")
+	local dim = ui:FindFirstChild("DimBackground")
+	if not popup then return end
+
+	local scale = getOrCreateScale(popup)
+	scale.Scale = 0.92
+	popup.Position = UDim2.new(0.5, 0, 0.52, 0)
+
+	if dim then
+		dim.BackgroundTransparency = 1
+		tween(dim, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundTransparency = 0.42
+		})
+	end
+
+	tween(scale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Scale = 1
+	})
+	tween(popup, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0.5, 0, 0.5, 0)
+	})
+end
+
+local function animatePopupClose(ui, afterClose)
+	local popup = ui:FindFirstChild("MainPopup")
+	local dim = ui:FindFirstChild("DimBackground")
+	if not popup then
+		if afterClose then afterClose() end
+		return
+	end
+
+	local scale = getOrCreateScale(popup)
+	if dim then
+		tween(dim, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			BackgroundTransparency = 1
+		})
+	end
+
+	local closeTween = tween(scale, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+		Scale = 0.94
+	})
+	tween(popup, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+		Position = UDim2.new(0.5, 0, 0.52, 0)
+	})
+
+	closeTween.Completed:Once(function()
+		if afterClose then afterClose() end
+	end)
+end
+
+local function attachButtonAnimation(button, holder)
+	local target = holder or button
+	local scale = getOrCreateScale(target)
+	local normalScale = 1
+	local hoverScale = 1.035
+	local pressScale = 0.97
+
+	button.MouseEnter:Connect(function()
+		tween(scale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = hoverScale })
+	end)
+	button.MouseLeave:Connect(function()
+		tween(scale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = normalScale })
+	end)
+	button.MouseButton1Down:Connect(function()
+		tween(scale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = pressScale })
+	end)
+	button.MouseButton1Up:Connect(function()
+		tween(scale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = hoverScale })
+	end)
+end
+
+local function attachCloseAnimation(button)
+	local glow = button:FindFirstChild("CloseHoverGlow") or button:FindFirstChild("HoverGlow")
+	button.MouseEnter:Connect(function()
+		if glow then
+			tween(glow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.82 })
+		end
+	end)
+	button.MouseLeave:Connect(function()
+		if glow then
+			tween(glow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 })
+		end
+	end)
+end
 
 local function isOwnedByCurrentUser(assetInfo)
 	if not assetInfo or not assetInfo.Creator then
@@ -24,29 +136,23 @@ local function isOwnedByCurrentUser(assetInfo)
 	return false
 end
 
--- =========================
--- Toolbar
--- =========================
 local toolbar = plugin:CreateToolbar("ISpooferMotion")
 
-local button = toolbar:CreateButton(
+local getIdsButton = toolbar:CreateButton(
 	"Get Id's",
 	"Opens UI to scan Animation or Sound IDs",
 	"rbxassetid://11778372908"
 )
-button.ClickableWhenViewportHidden = true
+getIdsButton.ClickableWhenViewportHidden = true
 
-local button2 = toolbar:CreateButton(
+local replaceIdsButton = toolbar:CreateButton(
 	"Replace Id's",
 	"Replaces old id's with new id's.",
 	"rbxassetid://11778372908"
 )
-button2.ClickableWhenViewportHidden = true
+replaceIdsButton.ClickableWhenViewportHidden = true
 
--- =========================
--- Helper: Extract all rbxassetid:// IDs from source
--- =========================
-local function extractAssetIds(source: string)
+local function extractAssetIds(source)
 	local ids = {}
 	for id in source:gmatch("rbxassetid://(%d+)") do
 		ids[id] = true
@@ -54,9 +160,6 @@ local function extractAssetIds(source: string)
 	return ids
 end
 
--- =========================
--- Get Animation IDs (instances + inside scripts)
--- =========================
 local function getAnimationIds(onProgress)
 	local animationIds = {}
 	local seenIds = {}
@@ -115,9 +218,6 @@ local function getAnimationIds(onProgress)
 	return animationIds
 end
 
--- =========================
--- Get Sound IDs (instances + inside scripts)
--- =========================
 local function getSoundIds(onProgress)
 	local soundIds = {}
 	local seenIds = {}
@@ -136,18 +236,16 @@ local function getSoundIds(onProgress)
 				local success, info = pcall(function()
 					return marketplace:GetProductInfo(tonumber(soundId))
 				end)
-				if success and info and info.AssetTypeId == 3 then
-					if not isOwnedByCurrentUser(info) then
-						table.insert(soundIds, string.format(
-							"[%s] [%s] [%s:%s],",
-							soundId,
-							info.Name or "Unknown",
-							info.Creator and info.Creator.CreatorType or "Unknown",
-							info.Creator and info.Creator.CreatorTargetId or "Unknown"
-						))
-						seenIds[soundId] = true
-						addedThisLoop = true
-					end
+				if success and info and info.AssetTypeId == 3 and not isOwnedByCurrentUser(info) then
+					table.insert(soundIds, string.format(
+						"[%s] [%s] [%s:%s],",
+						soundId,
+						info.Name or "Unknown",
+						info.Creator and info.Creator.CreatorType or "Unknown",
+						info.Creator and info.Creator.CreatorTargetId or "Unknown"
+					))
+					seenIds[soundId] = true
+					addedThisLoop = true
 				end
 			end
 		end
@@ -160,18 +258,16 @@ local function getSoundIds(onProgress)
 						local success, info = pcall(function()
 							return marketplace:GetProductInfo(tonumber(matchedId))
 						end)
-						if success and info and info.AssetTypeId == 3 then
-							if not isOwnedByCurrentUser(info) then
-								table.insert(soundIds, string.format(
-									"[%s] [%s] [%s:%s],",
-									matchedId,
-									info.Name or "Unknown",
-									info.Creator and info.Creator.CreatorType or "Unknown",
-									info.Creator and info.Creator.CreatorTargetId or "Unknown"
-								))
-								seenIds[matchedId] = true
-								addedThisLoop = true
-							end
+						if success and info and info.AssetTypeId == 3 and not isOwnedByCurrentUser(info) then
+							table.insert(soundIds, string.format(
+								"[%s] [%s] [%s:%s],",
+								matchedId,
+								info.Name or "Unknown",
+								info.Creator and info.Creator.CreatorType or "Unknown",
+								info.Creator and info.Creator.CreatorTargetId or "Unknown"
+							))
+							seenIds[matchedId] = true
+							addedThisLoop = true
 						end
 					end
 				end
@@ -186,10 +282,7 @@ local function getSoundIds(onProgress)
 	return soundIds
 end
 
--- =========================
--- Replace IDs
--- =========================
-local function replaceIds(inputString: string, onProgress)
+local function replaceIds(inputString, onProgress)
 	local idMap = {}
 
 	for line in inputString:gmatch("[^\r\n]+") do
@@ -214,7 +307,7 @@ local function replaceIds(inputString: string, onProgress)
 	end)
 
 	if not assetType then
-		warn("Could not determine asset type (Animation or Sound)")
+		warn("Could not determine asset type.")
 		return
 	end
 
@@ -222,12 +315,11 @@ local function replaceIds(inputString: string, onProgress)
 	local descendants = game:GetDescendants()
 	local total = #descendants
 	local processedCount = 0
-	local YIELD_EVERY = 50
 
 	for _, obj in ipairs(descendants) do
 		processedCount += 1
 
-		if processedCount % YIELD_EVERY == 0 then
+		if processedCount % 50 == 0 then
 			if onProgress then
 				onProgress(processedCount, total)
 			end
@@ -268,7 +360,7 @@ local function replaceIds(inputString: string, onProgress)
 					end)
 
 					if not success then
-						table.insert(skippedScripts, obj:GetFullName() .. " → " .. tostring(err))
+						table.insert(skippedScripts, obj:GetFullName() .. " -> " .. tostring(err))
 						warn("Failed to update script: " .. obj:GetFullName())
 					end
 				end
@@ -283,140 +375,117 @@ local function replaceIds(inputString: string, onProgress)
 	if #skippedScripts > 0 then
 		warn("The following scripts were skipped:\n" .. table.concat(skippedScripts, "\n"))
 	else
-		print("All replacements completed successfully!")
+		print("All replacements completed successfully.")
 	end
 end
 
--- =========================
--- UI Button Wiring
--- =========================
-local function connectUIButtons(popUpUI)
-	local panel = popUpUI.Panel
-	local outputBox = panel.Container.OutputBox
-	local buttons = panel.Buttons
+local function writeOutputScript(prefix, resultText)
+	local folder = serverStorage:FindFirstChild("Spoofer-Output") or Instance.new("Folder")
+	folder.Name = "Spoofer-Output"
+	folder.Parent = serverStorage
 
-	outputBox.ClearTextOnFocus = false
-	outputBox.TextEditable = false
-	buttons.Visible = true
-	outputBox.Text = ""
-	outputBox.PlaceholderText = "Choose an option.."
+	local scriptOut = Instance.new("Script")
+	scriptOut.Name = prefix .. "_" .. os.date("%Y-%m-%d_%H-%M-%S")
+	scriptOut.Disabled = true
+	scriptOut.Source = "--[[\n" ..
+		"-- COPY THE CONTENTS OF THIS SCRIPT AND PASTE IT INTO THE PROGRAM\n" ..
+		"-- Generated by ISpooferMotion\n\n" ..
+		resultText .. "\n\n--]]"
+	scriptOut.Parent = folder
 
-	buttons.AnimationButton.MouseButton1Click:Connect(function()
+	local children = folder:GetChildren()
+	table.sort(children, function(a, b) return a.Name > b.Name end)
+	for i = 6, #children do
+		children[i]:Destroy()
+	end
+
+	plugin:OpenScript(scriptOut)
+end
+
+local function setGetButtonsEnabled(animationButton, soundButton, enabled)
+	animationButton.Active = enabled
+	soundButton.Active = enabled
+	animationButton.AutoButtonColor = enabled
+	soundButton.AutoButtonColor = enabled
+end
+
+local function setupGetIdsUI(ui)
+	disconnectConnections(getIdsConnections)
+
+	local popup = ui.MainPopup
+	local prompt = popup.Prompt
+	local closeButton = popup.TopArea.CloseButton
+	local animationButton = popup.AnimationsButtonHolder.AnimationsButton
+	local soundButton = popup.SoundButtonHolder.SoundButton
+
+	attachButtonAnimation(animationButton, popup.AnimationsButtonHolder)
+	attachButtonAnimation(soundButton, popup.SoundButtonHolder)
+	attachCloseAnimation(closeButton)
+
+	prompt.Text = "Choose an option.."
+	setGetButtonsEnabled(animationButton, soundButton, true)
+
+	table.insert(getIdsConnections, animationButton.MouseButton1Click:Connect(function()
 		if isProcessing then return end
 		isProcessing = true
-		buttons.AnimationButton.Active = false
-		buttons.SoundButton.Active = false
-		buttons.Visible = false
-		outputBox.PlaceholderText = "Scanning animations..."
+		setGetButtonsEnabled(animationButton, soundButton, false)
+		prompt.Text = "Scanning animations..."
 
 		task.spawn(function()
 			local results = getAnimationIds(function(count)
-				outputBox.PlaceholderText = "Found " .. count .. " animations..."
+				prompt.Text = "Found " .. count .. " animations..."
 			end)
 
-			local resultText = table.concat(results, "\n")
-
-			local folder = serverStorage:FindFirstChild("Spoofer-Output") or Instance.new("Folder")
-			folder.Name = "Spoofer-Output"
-			folder.Parent = serverStorage
-
-			local scriptOut = Instance.new("Script")
-			scriptOut.Name = "Animations_" .. os.date("%Y-%m-%d_%H-%M-%S")
-			scriptOut.Disabled = true
-			scriptOut.Source = "--[[\n" ..
-				"-- COPY THE CONTENTS OF THIS SCRIPT AND PASTE IT INTO THE PROGRAM\n" ..
-				"-- Generated by ISpooferMotion\n\n" ..
-				resultText .. "\n\n--]]"
-			scriptOut.Parent = folder
-
-			local children = folder:GetChildren()
-			table.sort(children, function(a, b) return a.Name > b.Name end)
-			for i = 6, #children do
-				children[i]:Destroy()
-			end
-
-			plugin:OpenScript(scriptOut)
-
-			outputBox.PlaceholderText = "Choose an option.."
+			writeOutputScript("Animations", table.concat(results, "\n"))
+			prompt.Text = "Choose an option.."
 			isProcessing = false
-			buttons.AnimationButton.Active = true
-			buttons.SoundButton.Active = true
-			buttons.Visible = true
+			setGetButtonsEnabled(animationButton, soundButton, true)
 		end)
-	end)
+	end))
 
-	buttons.SoundButton.MouseButton1Click:Connect(function()
+	table.insert(getIdsConnections, soundButton.MouseButton1Click:Connect(function()
 		if isProcessing then return end
 		isProcessing = true
-		buttons.AnimationButton.Active = false
-		buttons.SoundButton.Active = false
-		buttons.Visible = false
-		outputBox.PlaceholderText = "Scanning sounds..."
+		setGetButtonsEnabled(animationButton, soundButton, false)
+		prompt.Text = "Scanning sounds..."
 
 		task.spawn(function()
 			local results = getSoundIds(function(count)
-				outputBox.PlaceholderText = "Found " .. count .. " sounds..."
+				prompt.Text = "Found " .. count .. " sounds..."
 			end)
 
-			local resultText = table.concat(results, "\n")
-
-			local folder = serverStorage:FindFirstChild("Spoofer-Output") or Instance.new("Folder")
-			folder.Name = "Spoofer-Output"
-			folder.Parent = serverStorage
-
-			local scriptOut = Instance.new("Script")
-			scriptOut.Name = "Sounds_" .. os.date("%Y-%m-%d_%H-%M-%S")
-			scriptOut.Disabled = true
-			scriptOut.Source = "--[[\n" ..
-				"-- COPY THE CONTENTS OF THIS SCRIPT AND PASTE IT INTO THE PROGRAM\n" ..
-				"-- Generated by ISpooferMotion\n\n" ..
-				resultText .. "\n\n--]]"
-			scriptOut.Parent = folder
-
-			local children = folder:GetChildren()
-			table.sort(children, function(a, b) return a.Name > b.Name end)
-			for i = 6, #children do
-				children[i]:Destroy()
-			end
-
-			plugin:OpenScript(scriptOut)
-
-			outputBox.PlaceholderText = "Choose an option.."
+			writeOutputScript("Sounds", table.concat(results, "\n"))
+			prompt.Text = "Choose an option.."
 			isProcessing = false
-			buttons.AnimationButton.Active = true
-			buttons.SoundButton.Active = true
-			buttons.Visible = true
+			setGetButtonsEnabled(animationButton, soundButton, true)
 		end)
-	end)
+	end))
 
-	panel.CloseButton.MouseButton1Click:Connect(function()
-		popUpUI.Enabled = false
-		outputBox.Text = ""
-		outputBox.PlaceholderText = ""
-		buttons.Visible = true
-		isProcessing = false
-		buttons.AnimationButton.Active = true
-		buttons.SoundButton.Active = true
-	end)
+	table.insert(getIdsConnections, closeButton.MouseButton1Click:Connect(function()
+		animatePopupClose(ui, function()
+			ui.Enabled = false
+			prompt.Text = "Choose an option.."
+			isProcessing = false
+			setGetButtonsEnabled(animationButton, soundButton, true)
+		end)
+	end))
 end
 
--- =========================
--- Replace UI (created once, reused)
--- =========================
-local popUpUI2 = nil
+local function setupReplaceUI(ui)
+	disconnectConnections(replaceIdsConnections)
 
-local function setupReplaceUI()
-	popUpUI2 = assets.PopUpUI2:Clone()
-	popUpUI2.Parent = coreGui
-
-	local inputBox = popUpUI2.Panel.Container.InputBox
-	local runButton = popUpUI2.Panel.Container.RunButton
+	local popup = ui.MainPopup
+	local inputBox = popup.MappedIdsInput
+	local runButton = popup.RunButtonHolder.RunButton
+	local closeButton = popup.TopArea.CloseButton
 	local isReplacingIds = false
 
-	-- Wire RunButton once
-	runButton.MouseButton1Click:Connect(function()
+	attachButtonAnimation(runButton, popup.RunButtonHolder)
+	attachCloseAnimation(closeButton)
+
+	table.insert(replaceIdsConnections, runButton.MouseButton1Click:Connect(function()
 		if isReplacingIds then
-			warn("Replacement already in progress, please wait.")
+			warn("Replacement already in progress.")
 			return
 		end
 		if not inputBox.Text or #inputBox.Text <= 5 then
@@ -425,7 +494,7 @@ local function setupReplaceUI()
 		end
 
 		isReplacingIds = true
-		local inputText = inputBox.Text  -- preserve original before overwriting
+		local inputText = inputBox.Text
 		local currentPct = 0
 		local replacing = true
 
@@ -445,39 +514,40 @@ local function setupReplaceUI()
 			end)
 			replacing = false
 			isReplacingIds = false
-			inputBox.Text = inputText  -- restore original mapping so user can re-run if needed
-			print("Replacement complete! Check the Output window for details.")
+			inputBox.Text = inputText
+			print("Replacement complete. Check the Output window for details.")
 		end)
-	end)
+	end))
 
-	-- Wire CloseButton once
-	popUpUI2.Panel.CloseButton.MouseButton1Click:Connect(function()
-		popUpUI2.Enabled = false
-		inputBox.Text = ""
-	end)
+	table.insert(replaceIdsConnections, closeButton.MouseButton1Click:Connect(function()
+		animatePopupClose(ui, function()
+			ui.Enabled = false
+			inputBox.Text = ""
+		end)
+	end))
 end
 
--- =========================
--- Toolbar Button 1 - Get IDs
--- =========================
-button.Click:Connect(function()
-	local existingUI = coreGui:FindFirstChild("PopUpUI")
+getIdsButton.Click:Connect(function()
+	local existingUI = coreGui:FindFirstChild("SpooferMotion_UI")
 	if existingUI then
 		existingUI:Destroy()
 	end
 
-	local popUpUI = assets.PopUpUI:Clone()
-	popUpUI.Parent = coreGui
-	popUpUI.Enabled = true
-	connectUIButtons(popUpUI)
+	local ui = createGetIdsUI(coreGui)
+	ui.Enabled = true
+	setupGetIdsUI(ui)
+	animatePopupOpen(ui)
 end)
 
--- =========================
--- Toolbar Button 2 - Replace IDs
--- =========================
-button2.Click:Connect(function()
-	if not popUpUI2 then
-		setupReplaceUI()
+replaceIdsButton.Click:Connect(function()
+	if replaceUi and replaceUi.Parent then
+		replaceUi.Enabled = true
+		animatePopupOpen(replaceUi)
+		return
 	end
-	popUpUI2.Enabled = true
+
+	replaceUi = createReplaceIdsUI(coreGui)
+	replaceUi.Enabled = true
+	setupReplaceUI(replaceUi)
+	animatePopupOpen(replaceUi)
 end)

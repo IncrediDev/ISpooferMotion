@@ -1,14 +1,3 @@
-
-# Fork note: external auto-updater
-
-This fork includes a separate launcher in `launcher/`. You need to run the launcher (Shortcut on desktop), not the app directly. The launcher stays separate and downloads/launches the latest official `IncrediDev/ISpooferMotion` release, so official app updates do not remove the launcher code.
-
-See `FORK_NOTES.md` for more details.
-
----
-
-
-
 # [ISM] Audio & Animation Spoofing
 
 **[ISM]****ISpooferMotion** is an animation & audio spoofing utility designed for Roblox developers and animators (Animation & Audio Spoofer / Asset Spoofer). It helps you quickly upload and apply animation and audio overrides. 

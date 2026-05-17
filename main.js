@@ -5,6 +5,12 @@ const { setupAppLifecycle, getMainWindow } = require('./modules/window');
 const { registerIpcHandlers } = require('./modules/utils/ipc-handlers');
 const { DEVELOPER_MODE, initializeFileLogging } = require('./modules/utils/common');
 
+// Keep all app-created folders under an exact, user-facing ISpooferMotion folder.
+app.setName('ISpooferMotion');
+try {
+  app.setPath('userData', path.join(app.getPath('appData'), 'ISpooferMotion'));
+} catch {}
+
 // Initialize file logging
 const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
 initializeFileLogging(logsDir);

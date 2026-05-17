@@ -1,0 +1,56 @@
+name: Release Windows Launcher and Plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild
+
+      - name: Build managed app EXE
+        run: npm run build -- --win portable --publish never
+
+      - name: Build Roblox Studio plugin
+        run: npm run build:plugin
+
+      - name: Install launcher dependencies
+        working-directory: launcher
+        run: npm ci
+
+      - name: Build launcher setup EXE
+        working-directory: launcher
+        run: npm run build:win
+
+      - name: Build release notes
+        run: node scripts/extract-release-notes.js
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: dist/release-notes.md
+          files: |
+            launcher/dist/ISpooferMotion-Setup.exe
+            dist/ISpooferMotion-App-*.exe
+            dist/ISpooferMotion-Plugin-*.rbxmx
