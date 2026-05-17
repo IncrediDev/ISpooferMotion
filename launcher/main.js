@@ -297,12 +297,15 @@ function getShortcutAndTempCleanupTargets() {
   const home = os.homedir();
   const appData = app.getPath('appData');
   const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
-  const desktop = path.join(home, 'Desktop');
+  let desktop = path.join(home, 'Desktop');
+  try { desktop = app.getPath('desktop'); } catch {}
   const startMenu = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs');
   const tempDir = os.tmpdir();
 
   targets.push(path.join(desktop, 'ISpooferMotion.lnk'));
+  targets.push(path.join(desktop, 'ISpooferMotion Launcher.lnk'));
   targets.push(path.join(startMenu, 'ISpooferMotion.lnk'));
+  targets.push(path.join(startMenu, 'ISpooferMotion Launcher.lnk'));
   targets.push(path.join(startMenu, 'ISpooferMotion'));
   targets.push(path.join(localAppData, 'Programs', 'ISpooferMotion'));
   targets.push(path.join(localAppData, 'ISpooferMotion'));
@@ -858,6 +861,82 @@ async function runWindowsSetupSilently(setupPath, destination) {
   }
 }
 
+
+function getDesktopDir() {
+  try { return app.getPath('desktop'); } catch {}
+  return path.join(os.homedir(), 'Desktop');
+}
+
+
+function ensureLauncherShortcut() {
+  if (process.platform !== 'win32' || !app.isPackaged) return false;
+  const shortcutPath = path.join(getDesktopDir(), 'ISpooferMotion Launcher.lnk');
+  const target = app.getPath('exe');
+  try {
+    fs.mkdirSync(path.dirname(shortcutPath), { recursive: true });
+    return shell.writeShortcutLink(shortcutPath, 'create', {
+      target,
+      cwd: path.dirname(target),
+      description: 'Launch ISpooferMotion updater',
+      icon: target,
+      iconIndex: 0,
+      appUserModelId: 'com.github.IncrediDev.ISpooferMotion.Launcher'
+    });
+  } catch (err) {
+    writeLog(`WARN: Failed to create launcher desktop shortcut: ${err.message}`);
+    return false;
+  }
+}
+
+function getStartMenuProgramsDir() {
+  const appData = process.env.APPDATA || app.getPath('appData');
+  return path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs');
+}
+
+function createShortcut(shortcutPath, exePath) {
+  if (process.platform !== 'win32') return false;
+  if (!isAllowedAppPath(exePath)) return false;
+  fs.mkdirSync(path.dirname(shortcutPath), { recursive: true });
+  try { fs.rmSync(shortcutPath, { force: true }); } catch {}
+  return shell.writeShortcutLink(shortcutPath, 'create', {
+    target: exePath,
+    cwd: path.dirname(exePath),
+    description: 'Launch ISpooferMotion',
+    icon: exePath,
+    iconIndex: 0,
+    appUserModelId: 'com.github.IncrediDev.ISpooferMotion'
+  });
+}
+
+function ensureAppShortcuts(exePath) {
+  if (process.platform !== 'win32') return [];
+  if (!isAllowedAppPath(exePath)) throw new Error(`Cannot create shortcuts for invalid app path: ${exePath}`);
+
+  const shortcuts = [
+    path.join(getDesktopDir(), 'ISpooferMotion.lnk'),
+    path.join(getStartMenuProgramsDir(), 'ISpooferMotion.lnk')
+  ];
+
+  const created = [];
+  const failed = [];
+  for (const shortcutPath of shortcuts) {
+    try {
+      if (createShortcut(shortcutPath, exePath)) created.push(shortcutPath);
+      else failed.push(shortcutPath);
+    } catch (err) {
+      failed.push(`${shortcutPath}: ${err.message}`);
+    }
+  }
+
+  if (created.length) {
+    sendStatus({ level: 'success', message: 'Shortcut created.', detail: created.join(' | ') });
+  }
+  if (failed.length) {
+    sendStatus({ level: 'warn', message: 'Could not create every shortcut.', detail: failed.join(' | '), log: true });
+  }
+  return created;
+}
+
 function getRobloxPluginsDir() {
   if (process.platform !== 'win32') {
     throw new Error('Automatic Roblox Studio plugin install currently supports Windows only.');
@@ -1094,6 +1173,7 @@ async function runUpdateFlow() {
       sendStatus({ level: 'success', message: `Already up to date: ${latestTag}` });
     }
 
+    ensureAppShortcuts(exePath);
     await cleanupDownloadArtifacts();
     await launchExe(exePath);
     sendStatus({ level: 'success', message: 'Done.' });
@@ -1417,6 +1497,7 @@ ipcMain.handle('launcher:quit', () => app.quit());
 
 app.whenReady().then(() => {
   ensureDirs();
+  ensureLauncherShortcut();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

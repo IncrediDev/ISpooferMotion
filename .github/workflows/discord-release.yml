@@ -190,9 +190,9 @@ jobs:
 
           payload = {
               "username": "ISpooferMotion Updates",
-              "content": "@everyone ISpooferMotion has updated! 🥳",
+              "content": "<@&1457029900291670210> ISpooferMotion has updated! 🥳",
               "allowed_mentions": {
-                  "parse": ["everyone"]
+                  "parse": ["roles"]
               },
               "embeds": [embed]
           }
