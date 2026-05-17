@@ -192,6 +192,7 @@ function registerIpcHandlers(getMainWindowFn, sendTransferUpdate, sendSpooferRes
     const { shell } = require('electron');
     const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
     try {
+      require('fs').mkdirSync(logsDir, { recursive: true });
       shell.openPath(logsDir);
       if (DEVELOPER_MODE) console.log('(Dev) Opened logs folder:', logsDir);
     } catch (err) {
