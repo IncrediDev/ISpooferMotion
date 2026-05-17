@@ -1,6 +1,6 @@
 {
   "name": "ispoofermotion",
-  "version": "1.2.15",
+  "version": "1.2.16",
   "main": "main.js",
   "description": "Animation spoofing utility for Roblox",
   "author": {
@@ -10,7 +10,8 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "build:plugin": "node scripts/build-plugin-rbxmx.js"
   },
   "devDependencies": {
     "electron": "^36.2.1",
@@ -27,15 +28,28 @@
     "appId": "com.github.IncrediDev.ISpooferMotion",
     "productName": "ISpooferMotion",
     "files": [
-      "**/*",
-      "!downloads/**/*"
+      "main.js",
+      "preload.js",
+      "index.html",
+      "modules/**/*",
+      "assets/**/*",
+      "build/**/*",
+      "package.json",
+      "!**/.git/**/*",
+      "!**/node_modules/.cache/**/*",
+      "!launcher/**/*",
+      "!downloads/**/*",
+      "!dist/**/*"
     ],
     "directories": {
       "output": "dist"
     },
     "win": {
-      "target": "nsis",
-      "icon": "assets/app_icon.ico"
+      "target": [
+        "portable"
+      ],
+      "icon": "assets/app_icon.ico",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": [
@@ -70,6 +84,8 @@
           "path": "/Applications"
         }
       ]
-    }
+    },
+    "artifactName": "ISpooferMotion-App-${version}-${os}-${arch}.${ext}",
+    "forceCodeSigning": false
   }
 }

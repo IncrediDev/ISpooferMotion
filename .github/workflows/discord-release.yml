@@ -1,0 +1,215 @@
+name: Post Release To Discord
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to post"
+        required: true
+        default: "v1.2.16"
+
+jobs:
+  discord-release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Set release info
+        id: release_info
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "url=https://github.com/${{ github.repository }}/releases/tag/${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            echo "url=${{ github.event.release.html_url }}" >> "$GITHUB_OUTPUT"
+            echo "name=${{ github.event.release.name }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ github.event.release.prerelease }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tagged release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release_info.outputs.tag }}
+
+      - name: Post tagged changelog to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release_info.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release_info.outputs.name }}
+          RELEASE_URL: ${{ steps.release_info.outputs.url }}
+          RELEASE_PRERELEASE: ${{ steps.release_info.outputs.prerelease }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+
+          webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+          github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+          repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+          release_tag = os.environ.get("RELEASE_TAG", "").strip()
+          release_name = os.environ.get("RELEASE_NAME", "").strip() or release_tag
+          release_url = os.environ.get("RELEASE_URL", "").strip()
+          prerelease = os.environ.get("RELEASE_PRERELEASE") == "true"
+
+          if not webhook_url:
+              raise RuntimeError("Missing DISCORD_RELEASE_WEBHOOK secret.")
+
+          if not release_tag:
+              raise RuntimeError("Missing release tag.")
+
+          def github_api(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {github_token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "ISpooferMotion-Release-Webhook"
+                  }
+              )
+
+              with urllib.request.urlopen(request) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          def read_version_changelog():
+              changelog_path = "CHANGELOG.md"
+
+              if not os.path.exists(changelog_path):
+                  raise RuntimeError("CHANGELOG.md was not found in the tagged release.")
+
+              with open(changelog_path, "r", encoding="utf-8") as file:
+                  changelog = file.read()
+
+              escaped_tag = re.escape(release_tag)
+              escaped_no_v = re.escape(release_tag.lstrip("v"))
+
+              patterns = [
+                  rf"^##\s+\[?{escaped_tag}\]?\s*$",
+                  rf"^##\s+\[?v?{escaped_no_v}\]?\s*$",
+              ]
+
+              match = None
+              for pattern in patterns:
+                  match = re.search(pattern, changelog, flags=re.MULTILINE)
+                  if match:
+                      break
+
+              if not match:
+                  raise RuntimeError(f"No changelog section found for {release_tag}.")
+
+              start = match.end()
+              next_section = re.search(r"^##\s+", changelog[start:], flags=re.MULTILINE)
+              end = start + next_section.start() if next_section else len(changelog)
+
+              section = changelog[start:end].strip()
+              return section or "No changelog entries were found for this version."
+
+          def get_commit_author():
+              fallback = {
+                  "name": "GitHub",
+                  "url": release_url,
+                  "avatar": None
+              }
+
+              if not repo or not github_token:
+                  return fallback
+
+              try:
+                  commit = github_api(f"/repos/{repo}/commits/{release_tag}")
+              except Exception:
+                  return fallback
+
+              github_author = commit.get("author") or {}
+              commit_author = (commit.get("commit") or {}).get("author") or {}
+
+              name = github_author.get("login") or commit_author.get("name") or "GitHub"
+              url = github_author.get("html_url") or release_url
+              avatar = github_author.get("avatar_url")
+
+              return {
+                  "name": name,
+                  "url": url,
+                  "avatar": avatar
+              }
+
+          changelog_text = read_version_changelog()
+          author = get_commit_author()
+
+          if len(changelog_text) > 1000:
+              changelog_field = f"[See full changelog]({release_url})"
+          else:
+              changelog_field = changelog_text
+
+          release_type = "Pre-release" if prerelease else "Stable release"
+          color = 16753920 if prerelease else 5763719
+
+          embed = {
+              "author": {
+                  "name": f"Released by {author['name']}",
+                  "url": author["url"]
+              },
+              "title": f"ISpooferMotion {release_tag}",
+              "url": release_url,
+              "description": f"**{release_type}** is now available.\n\n[Download from GitHub]({release_url})",
+              "color": color,
+              "fields": [
+                  {
+                      "name": "Version",
+                      "value": f"`{release_tag}`",
+                      "inline": True
+                  },
+                  {
+                      "name": "Release type",
+                      "value": release_type,
+                      "inline": True
+                  },
+                  {
+                      "name": "Changelog",
+                      "value": changelog_field,
+                      "inline": False
+                  }
+              ],
+              "footer": {
+                  "text": "ISpooferMotion release update"
+              }
+          }
+
+          if author["avatar"]:
+              embed["author"]["icon_url"] = author["avatar"]
+
+          payload = {
+              "username": "ISpooferMotion Updates",
+              "content": "@everyone ISpooferMotion has updated! 🥳",
+              "allowed_mentions": {
+                  "parse": ["everyone"]
+              },
+              "embeds": [embed]
+          }
+
+          request = urllib.request.Request(
+              webhook_url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "ISpooferMotion-Discord-Release-Webhook"
+              },
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request) as response:
+              if response.status >= 300:
+                  raise RuntimeError(f"Discord webhook failed with status {response.status}")
+
+          print(f"Posted Discord release announcement for {release_tag}.")
+          PY

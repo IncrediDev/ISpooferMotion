@@ -17,6 +17,32 @@
       --disabled-input-text: #888;
     }
 
+
+
+    *::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    *::-webkit-scrollbar-track {
+      background: var(--titlebar-bg);
+      border-radius: 8px;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      background: var(--border-color);
+      border: 2px solid var(--titlebar-bg);
+      border-radius: 8px;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background: var(--green-accent);
+    }
+
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-color) var(--titlebar-bg);
+    }
     body {
       margin: 0;
       user-select: none;
@@ -40,7 +66,7 @@
       justify-content: space-between;
       padding: 0 15px;
       border-bottom: 1px solid var(--border-color);
-      flex-shrink: 0; /* Prevent shrinking */
+      flex-shrink: 0;
     }
 
     #title-left {
@@ -81,28 +107,163 @@
     #title-buttons {
       display: flex;
       align-items: center;
+      gap: 8px;
       -webkit-app-region: no-drag;
+      position: relative;
+      z-index: 1000;
     }
 
-    #close-btn {
+    #close-btn,
+    .title-icon-btn {
       -webkit-app-region: no-drag;
       background-color: var(--input-bg);
-      border: none;
+      border: 1px solid transparent;
       color: var(--label-color);
-      font-size: 16px;
-      font-weight: bold;
+      font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
-      width: 30px;
+      min-width: 30px;
       height: 30px;
-      line-height: 30px;
+      line-height: 28px;
       text-align: center;
       border-radius: 4px;
-      transition: background-color 0.2s, color 0.2s;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
+      padding: 0 10px;
+    }
+    .title-icon-btn.gear { font-size: 16px; padding: 0; width: 34px; }
+    #close-btn { font-size: 16px; width: 30px; min-width: 30px; padding: 0; border: none; }
+    .title-icon-btn:hover,
+    .title-icon-btn.active {
+      background-color: #303337;
+      color: var(--text-color);
+      border-color: var(--green-accent);
+    }
+    .title-icon-btn:focus {
+      border-color: var(--green-accent);
+      box-shadow: 0 0 0 1px var(--green-accent);
+      outline: none;
     }
     #close-btn:hover {
       background-color: var(--red-accent);
       color: var(--text-color);
     }
+    .title-dropdown { position: relative; }
+    .title-menu-panel {
+      display: none;
+      position: absolute;
+      top: 38px;
+      right: 0;
+      width: min(360px, calc(100vw - 32px));
+      max-height: calc(100vh - 92px);
+      overflow-y: auto;
+      background: var(--titlebar-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+      padding: 12px;
+      z-index: 2000;
+      color: var(--text-color);
+      font-size: 13px;
+      text-align: left;
+    }
+    .title-dropdown.open .title-menu-panel { display: block; }
+    .title-dropdown.wide .title-menu-panel { width: min(620px, calc(100vw - 32px)); }
+    .title-dropdown.report .title-menu-panel { width: min(700px, calc(100vw - 32px)); }
+    .title-icon-btn.has-items { border-color: var(--green-accent); color: var(--text-color); }
+    .title-icon-count {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:16px;
+      height:16px;
+      padding:0 5px;
+      margin-left:5px;
+      border-radius:999px;
+      background:var(--green-accent);
+      color:#fff;
+      font-size:10px;
+      line-height:1;
+    }
+    .title-menu-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+      color: var(--text-color);
+      font-weight: 700;
+    }
+    .title-menu-panel label {
+      display: block;
+      color: var(--label-color);
+      font-size: 12px;
+      margin: 8px 0 5px;
+    }
+    .title-menu-panel select,
+    .title-menu-panel input[type="text"],
+    .title-menu-panel input[type="number"] {
+      padding: 8px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .title-menu-panel select:focus,
+    .title-menu-panel input[type="text"]:focus,
+    .title-menu-panel input[type="number"]:focus {
+      border-color: var(--green-accent);
+      box-shadow: 0 0 0 1px var(--green-accent);
+      outline: none;
+    }
+    .menu-field { margin-bottom: 10px; }
+    .menu-inline { display:flex; gap:6px; align-items:center; }
+    .asset-input-card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .asset-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 2px;
+    }
+    .asset-title-block {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+    .asset-title-block label {
+      margin: 0;
+      font-size: 13px;
+      color: var(--text-color);
+      font-weight: 700;
+    }
+    .asset-title-hint {
+      font-size: 11px;
+      color: var(--label-color);
+      line-height: 1.25;
+    }
+    .asset-mode-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 999px;
+      padding: 0;
+    }
+    .asset-mode-toggle .toggle-label {
+      margin: 0;
+      color: var(--text-color);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .asset-mode-toggle:hover .toggle-label { color: var(--green-accent); }
 
     .main-content {
       padding: 20px;
@@ -113,6 +274,39 @@
 
     .form-group {
       margin-bottom: 15px;
+    }
+
+    .main-content > .form-group,
+    .toggles-container,
+    #advanced-options-panel,
+    #session-banner,
+    .output-area {
+      border-radius: 6px;
+    }
+
+    .main-content > .form-group {
+      background: rgba(58, 62, 66, 0.42);
+      border: 1px solid rgba(79, 84, 92, 0.72);
+      padding: 12px;
+    }
+
+    .main-content > .toggle-group,
+    .toggles-container {
+      background: rgba(58, 62, 66, 0.42);
+      border: 1px solid rgba(79, 84, 92, 0.72);
+      padding: 12px;
+    }
+
+    .input-box,
+    input[type="text"],
+    input[type="number"],
+    textarea,
+    select {
+      transition: border-color 0.18s, box-shadow 0.18s, background-color 0.18s;
+    }
+
+    .title-menu-panel {
+      backdrop-filter: blur(4px);
     }
 
     .form-group label {
@@ -189,6 +383,31 @@
     }
     .input-action-btn:hover {
       color: var(--text-color);
+    }
+
+    .open-cloud-key-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .open-cloud-key-row input {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .get-open-cloud-btn {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      background-color: var(--green-accent);
+      color: #fff;
+      border: 1px solid var(--green-accent);
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+      -webkit-app-region: no-drag;
+    }
+    .get-open-cloud-btn:hover {
+      filter: brightness(1.08);
     }
 
     .form-group input.disabled-input,
@@ -279,27 +498,314 @@
     }
     #run-spoofer-btn:hover { background-color: #388E3C; }
 
+    .monitor-actions {
+      display: flex;
+      gap: 8px;
+      margin: -8px 0 12px;
+      flex-wrap: wrap;
+    }
+    .monitor-btn {
+      padding: 7px 11px;
+      background: var(--input-bg);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .monitor-btn:hover,
+    .monitor-btn.active {
+      border-color: var(--green-accent);
+      background: #303337;
+    }
+    .monitor-dot {
+      min-width: 17px;
+      height: 17px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--green-accent);
+      color: #fff;
+      font-size: 10px;
+      line-height: 17px;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .queue-panel {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+    }
+    .queue-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 10px;
+      color: var(--text-color);
+      font-size: 13px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+    }
+    .queue-title-block {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+    .queue-title {
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .queue-summary-line {
+      color: var(--label-color);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .queue-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .queue-action-btn {
+      padding: 6px 10px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .queue-action-btn:hover:not(:disabled) { border-color: var(--green-accent); }
+    .queue-action-btn.primary { background: var(--green-accent); border-color: var(--green-accent); }
+    .queue-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .queue-counts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .queue-chip {
+      padding: 4px 7px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(35,39,42,.75);
+      border-radius: 999px;
+      font-size: 11px;
+      color: var(--label-color);
+    }
+    .queue-chip strong { color: var(--text-color); }
+    .queue-list {
+      max-height: min(380px, calc(100vh - 230px));
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding-right: 2px;
+    }
+    .queue-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 12px;
+      align-items: center;
+      padding: 9px 10px;
+      background: rgba(35,39,42,.86);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .queue-row.error { border-color: rgba(244,67,54,.35); }
+    .queue-row.completed { border-color: rgba(76,175,80,.28); }
+    .queue-row.processing { border-color: rgba(76,175,80,.45); }
+    .queue-row.cooldown { border-color: rgba(245,158,11,.4); }
+    .queue-row-main { min-width: 0; }
+    .queue-row-name { color: var(--text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .queue-row-meta { color: var(--label-color); font-size: 11px; margin-top: 3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .queue-status {
+      justify-self: end;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: var(--label-color);
+      background: rgba(255,255,255,.05);
+      text-transform: capitalize;
+      white-space: nowrap;
+      font-size: 11px;
+    }
+    .queue-status.error { color: #fff; background: rgba(244,67,54,.45); }
+    .queue-status.completed { color: #fff; background: rgba(76,175,80,.42); }
+    .queue-status.processing { color: #fff; background: rgba(76,175,80,.55); }
+    .queue-status.cooldown { color: #111; background: rgba(245,158,11,.82); }
+    .queue-progress-line { grid-column: 1 / -1; display:flex; align-items:center; gap:8px; }
+    .queue-progress-track { height: 6px; background: #25282b; border-radius: 999px; overflow: hidden; flex:1; }
+    .queue-progress-bar { height: 100%; background: var(--green-accent); width: 0%; transition: width .2s; }
+    .queue-progress-text { color: var(--label-color); font-size: 11px; min-width: 34px; text-align:right; }
+    .queue-empty {
+      padding: 16px;
+      text-align: center;
+      color: var(--label-color);
+      border: 1px dashed var(--border-color);
+      border-radius: 7px;
+      background: rgba(35,39,42,.42);
+      font-size: 12px;
+    }
+
+    .pause-compact-btn {
+      padding: 5px 8px;
+      background: var(--input-bg);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1;
+      min-width: 54px;
+      height: 28px;
+      align-self: center;
+    }
+    .pause-compact-btn:hover { border-color: var(--green-accent); }
+
+    .run-report-panel {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      font-size: 13px;
+    }
+    .run-report-header {
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:12px;
+      padding-bottom:10px;
+      border-bottom:1px solid rgba(255,255,255,.07);
+    }
+    .run-report-title {
+      display:flex;
+      flex-direction:column;
+      gap:3px;
+      min-width:0;
+    }
+    .run-report-title strong { font-size: 14px; }
+    .run-report-subtitle { color: var(--label-color); font-size: 12px; }
+    .report-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .settings-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+    .settings-panel select, .settings-panel input[type="text"], .settings-panel input[type="number"] {
+      padding: 8px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .settings-action-btn {
+      padding: 7px 10px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .settings-action-btn.primary { background: var(--green-accent); color: #fff; border-color: var(--green-accent); }
+    .report-card {
+      padding: 10px;
+      background: rgba(35,39,42,.82);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 7px;
+      min-width: 0;
+    }
+    .report-card span {
+      display:block;
+      color: var(--label-color);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .report-card strong {
+      display: block;
+      font-size: 18px;
+      margin-top: 5px;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: normal;
+      line-height: 1.15;
+    }
+    .report-card.good strong { color: var(--green-accent); }
+    .report-card.warn strong { color: #F59E0B; }
+    .report-card.bad strong { color: var(--red-accent); }
+    .report-failure-list {
+      margin-top: 12px;
+      max-height: min(300px, calc(100vh - 290px));
+      overflow-y: auto;
+      color: var(--label-color);
+      border-top: 1px solid rgba(255,255,255,.07);
+      padding-top: 10px;
+    }
+    .report-failure-summary {
+      display:flex;
+      flex-wrap:wrap;
+      gap:6px;
+      margin-bottom:8px;
+    }
+    .report-pill {
+      padding:4px 7px;
+      border:1px solid rgba(255,255,255,.08);
+      background: rgba(35,39,42,.72);
+      border-radius:999px;
+      font-size:11px;
+    }
+    .report-failure-row {
+      display:grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      gap:8px;
+      padding:8px 0;
+      border-bottom:1px solid rgba(255,255,255,.05);
+    }
+    .report-failure-row:last-child { border-bottom:0; }
+    .report-stage { color: var(--green-accent); font-size: 11px; text-transform: uppercase; letter-spacing:.04em; }
+    .report-failure-main { min-width:0; }
+    .report-failure-name { color: var(--text-color); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .report-failure-reason { font-size:12px; overflow-wrap:anywhere; line-height:1.35; }
+    .report-empty { color: var(--green-accent); font-size:12px; padding: 14px 0; }
+    .report-placeholder {
+      margin-top: 12px;
+      padding: 16px;
+      text-align: center;
+      color: var(--label-color);
+      border: 1px dashed var(--border-color);
+      border-radius: 7px;
+      background: rgba(35,39,42,.42);
+      font-size: 12px;
+    }
+
     .output-area {
       position: relative;
     }
 
-    /* NEW: Status Bar Styles */
+    /* Status bar */
     #status-bar {
-      background-color: var(--titlebar-bg); /* Same as title bar for consistency */
-      padding: 6px 15px; /* Adjust padding as needed */
+      background-color: var(--titlebar-bg);
+      padding: 6px 15px;
       border-top: 1px solid var(--border-color);
-      flex-shrink: 0; /* Prevent shrinking */
-      min-height: 1em; /* Ensure it has some height even if empty */
+      flex-shrink: 0;
+      min-height: 1em;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
     }
 
-    #status-text {
-      color: var(--green-accent);
-      font-size: 13px;
-      user-select: text; /* Allow selecting status text if needed */
-      -webkit-user-select: text;
-    }
+    #status-text { display: none; }
 
-    /* Discord button layout (allow SVG's own color to show) */
+    /* Discord button */
     #discord-btn {
       display: inline-flex;
       align-items: center;
@@ -347,22 +853,114 @@
       flex-shrink: 0;
     }
 
-    .tooltip-icon:hover::after {
-      content: attr(title);
-      position: absolute;
-      bottom: 125%;
-      left: 50%;
-      transform: translateX(-50%);
-      background-color: #444;
+    .tooltip-icon:hover,
+    .tooltip-icon:focus {
+      background-color: var(--green-accent);
+      color: #fff;
+      outline: none;
+    }
+
+    .app-tooltip {
+      position: fixed;
+      display: none;
+      max-width: min(360px, calc(100vw - 28px));
+      background-color: #1f2225;
       color: var(--text-color);
-      padding: 8px 12px;
-      border-radius: 4px;
+      padding: 10px 12px;
+      border-radius: 6px;
       font-size: 12px;
-      white-space: nowrap;
-      z-index: 1000;
+      line-height: 1.4;
+      white-space: normal;
+      z-index: 10000;
       border: 1px solid var(--border-color);
       pointer-events: none;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      box-shadow: 0 10px 26px rgba(0,0,0,0.38);
+      text-align: left;
+      overflow-wrap: anywhere;
+    }
+
+    .app-tooltip.visible { display: block; }
+
+    .value-stepper {
+      display: grid;
+      grid-template-columns: 1fr 34px;
+      grid-template-rows: 19px 19px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      background: var(--bg-color);
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .value-stepper:focus-within {
+      border-color: var(--green-accent);
+      box-shadow: 0 0 0 1px var(--green-accent);
+    }
+
+    .value-stepper input {
+      grid-row: 1 / 3;
+      width: 100%;
+      min-width: 0;
+      border: none !important;
+      border-radius: 0 !important;
+      background: transparent !important;
+      padding: 8px !important;
+      color: var(--text-color) !important;
+      outline: none !important;
+      -moz-appearance: textfield;
+    }
+
+    .value-stepper input::-webkit-outer-spin-button,
+    .value-stepper input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .stepper-btn {
+      border: none;
+      border-left: 1px solid var(--border-color);
+      background: #303337;
+      color: var(--label-color);
+      cursor: pointer;
+      font-size: 10px;
+      line-height: 1;
+      padding: 0;
+      transition: background-color 0.15s, color 0.15s;
+    }
+
+    .stepper-btn:hover,
+    .stepper-btn:focus {
+      background: var(--green-accent);
+      color: white;
+      outline: none;
+    }
+
+    .stepper-btn.down {
+      border-top: 1px solid var(--border-color);
+    }
+
+    .settings-panel select:focus,
+    .settings-panel input[type="text"]:focus,
+    .settings-panel input[type="number"]:focus {
+      border-color: var(--green-accent);
+      box-shadow: 0 0 0 1px var(--green-accent);
+      outline: none;
+    }
+
+    .profile-actions,
+    .menu-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .menu-actions .settings-action-btn { flex: 1 1 auto; }
+
+    .profile-status {
+      color: var(--label-color);
+      font-size: 12px;
+      min-height: 16px;
+      flex: 1 1 160px;
     }
 
     #run-spoofer-btn:disabled {
@@ -431,9 +1029,12 @@
       font-weight: normal;
     }
 
-  </style>
+  
+    .failure-creator { color: var(--label-color); font-size: 11px; margin-left: 4px; }
+</style>
 </head>
 <body>
+  <div id="app-tooltip" class="app-tooltip" role="tooltip"></div>
 
   <div id="titlebar">
     <div id="title-left">
@@ -444,21 +1045,127 @@
       </div>
     </div>
     <div id="title-buttons">
+      <div class="title-dropdown wide" id="queue-menu">
+        <button id="queue-menu-btn" class="title-icon-btn" title="Queue">Queue <span id="queue-title-count" class="title-icon-count" style="display:none;">0</span></button>
+        <div class="title-menu-panel" id="queue-menu-panel">
+          <div id="queue-panel" class="queue-panel">
+            <div class="queue-header">
+              <div class="queue-title-block">
+                <span class="queue-title">Batch Queue</span>
+                <span id="queue-summary" class="queue-summary-line">No active queue.</span>
+              </div>
+              <div class="queue-actions">
+                <button id="retry-failed-btn" class="queue-action-btn primary" disabled>Retry Failed</button>
+                <button id="clear-queue-btn" class="queue-action-btn">Clear</button>
+              </div>
+            </div>
+            <div id="queue-counts" class="queue-counts"></div>
+            <div id="queue-list" class="queue-list"><div class="queue-empty">Queue is empty.</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="title-dropdown report" id="report-menu">
+        <button id="report-menu-btn" class="title-icon-btn" title="Run Report">Report</button>
+        <div class="title-menu-panel" id="report-menu-panel">
+          <div id="run-report-panel" class="run-report-panel">
+            <div class="run-report-header">
+              <div class="run-report-title">
+                <strong>Run Report</strong>
+                <span class="run-report-subtitle">Latest batch summary</span>
+              </div>
+              <span id="run-report-mode" class="run-report-subtitle">No run yet</span>
+            </div>
+            <div id="run-report-grid" class="report-grid"></div>
+            <div id="run-report-failures" class="report-failure-list"><div class="report-placeholder">Run a batch to see the report here.</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="title-dropdown" id="profile-menu">
+        <button id="profile-menu-btn" class="title-icon-btn" title="Profiles">Profiles ▾</button>
+        <div class="title-menu-panel" id="profile-menu-panel">
+          <div class="title-menu-heading"><span>Profiles</span><span id="profile-status" class="profile-status"></span></div>
+          <div class="menu-field">
+            <label for="profile-select">Select profile</label>
+            <select id="profile-select" style="width:100%;">
+              <option value="personal">Personal account</option>
+              <option value="main-group">Main group</option>
+              <option value="testing-group">Testing group</option>
+            </select>
+          </div>
+          <div class="menu-actions">
+            <button id="save-profile-btn" class="settings-action-btn primary">Save Profile</button>
+            <button id="apply-profile-btn" class="settings-action-btn">Apply Profile</button>
+          </div>
+        </div>
+      </div>
+      <div class="title-dropdown" id="settings-menu">
+        <button id="settings-menu-btn" class="title-icon-btn gear" title="Settings">⚙</button>
+        <div class="title-menu-panel" id="settings-menu-panel">
+          <div class="title-menu-heading"><span>Settings</span></div>
+          <div class="menu-field">
+            <label for="default-output-folder">Default output folder</label>
+            <div class="menu-inline">
+              <input type="text" id="default-output-folder" placeholder="Optional" readonly style="width:100%;">
+              <button id="default-folder-browse-btn" class="settings-action-btn">Browse</button>
+            </div>
+          </div>
+          <div class="menu-field">
+            <label for="uploadConcurrency" style="display:flex; align-items:center; gap:6px;">
+              Upload concurrency
+              <span class="tooltip-icon" title="How many uploads can run at the same time. Higher values can finish faster, but may cause more rate limits or network failures. Lower it if uploads fail often.">?</span>
+            </label>
+            <div class="value-stepper" data-stepper-for="uploadConcurrency">
+              <input type="number" id="uploadConcurrency" value="10" min="1" max="10" inputmode="numeric">
+              <button type="button" class="stepper-btn up" data-stepper-target="uploadConcurrency" data-step="1" aria-label="Increase upload concurrency">▲</button>
+              <button type="button" class="stepper-btn down" data-stepper-target="uploadConcurrency" data-step="-1" aria-label="Decrease upload concurrency">▼</button>
+            </div>
+          </div>
+          <div class="menu-field">
+            <label for="downloadConcurrency" style="display:flex; align-items:center; gap:6px;">
+              Download concurrency
+              <span class="tooltip-icon" title="How many downloads can run at the same time. Higher values can finish faster, but may hit rate limits. Lower it for large batches or unstable connections.">?</span>
+            </label>
+            <div class="value-stepper" data-stepper-for="downloadConcurrency">
+              <input type="number" id="downloadConcurrency" value="10" min="1" max="25" inputmode="numeric">
+              <button type="button" class="stepper-btn up" data-stepper-target="downloadConcurrency" data-step="1" aria-label="Increase download concurrency">▲</button>
+              <button type="button" class="stepper-btn down" data-stepper-target="downloadConcurrency" data-step="-1" aria-label="Decrease download concurrency">▼</button>
+            </div>
+          </div>
+          <div class="settings-row" style="margin-top:12px;">
+            <div class="toggle-group" style="margin:0;">
+              <label for="auto-save-sessions" class="toggle-label">Auto-save sessions</label>
+              <label class="switch">
+                <input type="checkbox" id="auto-save-sessions" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+          <div class="menu-actions" style="margin-top:12px;">
+            <button id="clear-history-btn" class="settings-action-btn">Clear History</button>
+            <button id="settings-open-logs-btn" class="settings-action-btn">Open Logs Folder</button>
+            <button id="reset-settings-btn" class="settings-action-btn">Reset Settings</button>
+          </div>
+        </div>
+      </div>
       <button id="close-btn">X</button>
     </div>
   </div>
 
   <div class="main-content">
-    <div class="toggle-group" style="margin-bottom: 15px;">
-      <label for="spoof-sounds" class="toggle-label">Spoof Sounds</label>
-      <label class="switch">
-        <input type="checkbox" id="spoof-sounds">
-        <span class="slider"></span>
-      </label>
-    </div>
-
-    <div class="form-group">
-      <label for="animationId" id="assetIdLabel">Animation Id Input</label>
+    <div class="form-group asset-input-card">
+      <div class="asset-card-header">
+        <div class="asset-title-block">
+          <label for="animationId" id="assetIdLabel">Animation Id Input</label>
+          <span class="asset-title-hint" id="assetInputHint">Paste animation IDs, Roblox URLs, or formatted batch lines.</span>
+        </div>
+        <div class="asset-mode-toggle">
+          <label for="spoof-sounds" class="toggle-label">Spoof Sounds</label>
+          <label class="switch" aria-label="Spoof sounds instead of animations">
+            <input type="checkbox" id="spoof-sounds">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
       <div class="input-with-button-container">
         <textarea id="animationId" name="animationId" rows="3" class="input-box" placeholder="Format: [123456][Name][User123] (or Group123) per line"></textarea>
         <button id="paste-animationId-btn" class="input-action-btn" title="Paste Animation ID">📥</button>
@@ -475,13 +1182,18 @@
         Open Cloud API Key
         <span class="tooltip-icon" title="Required for animation and sound uploads. Go to create.roblox.com → Open Cloud → API Keys. Create a key and enable 'Assets' with Read & Write access.">?</span>
       </label>
-      <input type="text" id="openCloudApiKey" name="openCloudApiKey" autocomplete="off" placeholder="Enter your Open Cloud API Key (required for animations)">
+      <div class="open-cloud-key-row">
+        <input type="text" id="openCloudApiKey" name="openCloudApiKey" autocomplete="off" placeholder="Enter your Open Cloud API Key (required for animations)">
+        <button type="button" id="get-open-cloud-key-btn" class="get-open-cloud-btn" title="Open Roblox Open Cloud credentials">Get</button>
+      </div>
     </div>
 
     <div class="form-group">
       <label for="groupId">GroupID</label>
       <input type="text" id="groupId" name="groupId" autocomplete="off" placeholder="Leave empty if you dont want to upload to group">
     </div>
+
+
 
     <button id="advanced-options-btn" style="align-self: flex-start; padding: 6px 12px; background-color: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 12px; margin-bottom: 10px; transition: background-color 0.2s;">⚙️ Advanced Options</button>
 
@@ -570,11 +1282,16 @@
     </div>
     <div style="display:flex; gap:8px;">
       <button id="run-spoofer-btn" style="flex:1;">Run Spoofer</button>
-      <button id="pause-spoofer-btn" style="display:none; padding:10px 16px; background:var(--input-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:14px;">⏸ Pause</button>
+      <button id="pause-spoofer-btn" class="pause-compact-btn" style="display:none;">⏸ Pause</button>
     </div>
 
     <div id="audio-quota-info" style="margin-top: 10px; padding: 10px; background-color: var(--input-bg); border-radius: 4px; font-size: 13px; color: var(--label-color); display: none;">
       <span id="audio-quota-text">Checking audio quota...</span>
+    </div>
+
+    <div class="monitor-actions">
+      <button type="button" id="open-queue-btn" class="monitor-btn">Queue <span id="queue-monitor-count" class="monitor-dot" style="display:none;">0</span></button>
+      <button type="button" id="open-report-btn" class="monitor-btn">Run Report</button>
     </div>
 
     <div class="output-area">
@@ -596,14 +1313,14 @@
     </div>
   </div>
 
-  <!-- NEW: Status Bar HTML -->
+
   <div id="status-bar">
-    <span id="status-text">Ready</span> <!-- Initial status message -->
-    <span id="status-right" style="float: right; display: flex; align-items: center; gap: 8px;">
+
+    <span id="status-right" style="display: flex; align-items: center; gap: 8px;">
       <button id="logs-btn" title="Open logs folder" aria-label="Open Logs Folder">📁 Logs</button>
       <span id="version-text" style="color: var(--label-color); font-size: 12px;">v?</span>
       <button id="discord-btn" title="Join for support or questions!" aria-label="Join Discord">
-        <!-- Replaced SVG: uses Discord default purple as provided -->
+
         <svg viewBox="0 -28.5 256 256" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" preserveAspectRatio="xMidYMid" width="16" height="16" aria-hidden="true">
           <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
           <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
@@ -647,7 +1364,88 @@
     const uploadRetryDelayInput = document.getElementById('uploadRetryDelay'); // Get reference
     const statusTextElement = document.getElementById('status-text');
     const openCloudApiKeyInput = document.getElementById('openCloudApiKey');
+    const getOpenCloudKeyBtn = document.getElementById('get-open-cloud-key-btn');
     const apiKeyGroup = document.getElementById('api-key-group');
+    const queuePanel = document.getElementById('queue-panel');
+    const queueList = document.getElementById('queue-list');
+    const queueSummary = document.getElementById('queue-summary');
+    const retryFailedBtn = document.getElementById('retry-failed-btn');
+    const clearQueueBtn = document.getElementById('clear-queue-btn');
+    const runReportPanel = document.getElementById('run-report-panel');
+    const runReportGrid = document.getElementById('run-report-grid');
+    const runReportFailures = document.getElementById('run-report-failures');
+    const runReportMode = document.getElementById('run-report-mode');
+    const queueCounts = document.getElementById('queue-counts');
+    const queueMenu = document.getElementById('queue-menu');
+    const queueMenuBtn = document.getElementById('queue-menu-btn');
+    const queueTitleCount = document.getElementById('queue-title-count');
+    const queueMonitorBtn = document.getElementById('open-queue-btn');
+    const queueMonitorCount = document.getElementById('queue-monitor-count');
+    const reportMenu = document.getElementById('report-menu');
+    const reportMenuBtn = document.getElementById('report-menu-btn');
+    const reportMonitorBtn = document.getElementById('open-report-btn');
+    const profileSelect = document.getElementById('profile-select');
+    const saveProfileBtn = document.getElementById('save-profile-btn');
+    const applyProfileBtn = document.getElementById('apply-profile-btn');
+    const profileStatus = document.getElementById('profile-status');
+    const clearHistoryBtn = document.getElementById('clear-history-btn');
+    const settingsOpenLogsBtn = document.getElementById('settings-open-logs-btn');
+    const resetSettingsBtn = document.getElementById('reset-settings-btn');
+    const defaultOutputFolderInput = document.getElementById('default-output-folder');
+    const defaultFolderBrowseBtn = document.getElementById('default-folder-browse-btn');
+    const autoSaveSessionsToggle = document.getElementById('auto-save-sessions');
+    const uploadConcurrencyInput = document.getElementById('uploadConcurrency');
+    const downloadConcurrencyInput = document.getElementById('downloadConcurrency');
+    const profileMenu = document.getElementById('profile-menu');
+    const profileMenuBtn = document.getElementById('profile-menu-btn');
+    const settingsMenu = document.getElementById('settings-menu');
+    const settingsMenuBtn = document.getElementById('settings-menu-btn');
+    let lastFailedAnimationIdInput = '';
+
+
+
+    // --- Header dropdowns ---
+    function closeHeaderMenus(except = null) {
+        [queueMenu, reportMenu, profileMenu, settingsMenu].forEach(menu => {
+            if (menu && menu !== except) {
+                menu.classList.remove('open');
+                const btn = menu.querySelector('.title-icon-btn');
+                if (btn) btn.classList.remove('active');
+            }
+        });
+    }
+    function toggleHeaderMenu(menu, btn) {
+        if (!menu) return;
+        const willOpen = !menu.classList.contains('open');
+        closeHeaderMenus(menu);
+        menu.classList.toggle('open', willOpen);
+        if (btn) btn.classList.toggle('active', willOpen);
+    }
+    if (profileMenuBtn) profileMenuBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleHeaderMenu(profileMenu, profileMenuBtn);
+    });
+    if (settingsMenuBtn) settingsMenuBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleHeaderMenu(settingsMenu, settingsMenuBtn);
+    });
+    if (queueMenuBtn) queueMenuBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleHeaderMenu(queueMenu, queueMenuBtn);
+    });
+    if (reportMenuBtn) reportMenuBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleHeaderMenu(reportMenu, reportMenuBtn);
+    });
+    if (queueMonitorBtn) queueMonitorBtn.addEventListener('click', () => toggleHeaderMenu(queueMenu, queueMenuBtn));
+    if (reportMonitorBtn) reportMonitorBtn.addEventListener('click', () => toggleHeaderMenu(reportMenu, reportMenuBtn));
+    document.addEventListener('click', (event) => {
+        if (event.target.closest && event.target.closest('.title-dropdown')) return;
+        closeHeaderMenus();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeHeaderMenus();
+    });
 
     // --- Advanced Options Toggle ---
     if (advancedOptionsBtn && advancedOptionsPanel) {
@@ -660,9 +1458,400 @@
 
     // --- Status Update Function ---
     function updateStatus(message) {
-        if (statusTextElement) {
-            statusTextElement.textContent = message;
+        if (message) console.debug('[status]', message);
+    }
+// --- Profiles, settings, and report helpers ---
+    const SETTINGS_KEY = 'ispoofer.settings.v2';
+    const PROFILES_KEY = 'ispoofer.profiles.v2';
+    const SELECTED_PROFILE_KEY = 'ispoofer.selectedProfile.v2';
+    const DEFAULT_SETTINGS = { defaultOutputFolder: '', autoSaveSessions: true, uploadConcurrency: 10, downloadConcurrency: 10 };
+
+    function readJsonStorage(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key) || '') || fallback; } catch { return fallback; }
+    }
+    function writeJsonStorage(key, value) {
+        localStorage.setItem(key, JSON.stringify(value));
+    }
+
+    function clampNumberInput(input) {
+        if (!input) return 0;
+        const min = Number(input.min || 1);
+        const max = Number(input.max || 999);
+        let value = parseInt(input.value, 10);
+        if (!Number.isFinite(value)) value = min;
+        value = Math.max(min, Math.min(max, value));
+        input.value = String(value);
+        return value;
+    }
+
+    function updateProfileStatus(message) {
+        if (!profileStatus) return;
+        profileStatus.textContent = message || '';
+        if (message) setTimeout(() => { if (profileStatus.textContent === message) profileStatus.textContent = ''; }, 3500);
+    }
+
+    function ensureDefaultProfiles() {
+        const profiles = getProfiles();
+        let changed = false;
+        for (const id of ['personal', 'main-group', 'testing-group']) {
+            if (!profiles[id]) { profiles[id] = {}; changed = true; }
         }
+        if (changed) writeJsonStorage(PROFILES_KEY, profiles);
+        return profiles;
+    }
+
+    function readSettings() {
+        return { ...DEFAULT_SETTINGS, ...readJsonStorage(SETTINGS_KEY, {}) };
+    }
+    function saveSettings(partial = {}) {
+        const settings = { ...readSettings(), ...partial };
+        writeJsonStorage(SETTINGS_KEY, settings);
+        applySettings(settings);
+        return settings;
+    }
+    function applySettings(settings = readSettings()) {
+        if (defaultOutputFolderInput) defaultOutputFolderInput.value = settings.defaultOutputFolder || '';
+        if (autoSaveSessionsToggle) autoSaveSessionsToggle.checked = settings.autoSaveSessions !== false;
+        if (uploadConcurrencyInput) { uploadConcurrencyInput.value = settings.uploadConcurrency || 10; clampNumberInput(uploadConcurrencyInput); }
+        if (downloadConcurrencyInput) { downloadConcurrencyInput.value = settings.downloadConcurrency || 10; clampNumberInput(downloadConcurrencyInput); }
+    }
+    function getProfiles() {
+        return readJsonStorage(PROFILES_KEY, {});
+    }
+    function getCurrentProfileId() {
+        return profileSelect ? profileSelect.value : 'personal';
+    }
+    function profilePayloadFromForm() {
+        // Profiles intentionally save credentials and settings, but not the
+        // animation/sound ID input or output text areas.
+        return {
+            robloxCookie: robloxCookieInput ? robloxCookieInput.value : '',
+            apiKey: openCloudApiKeyInput ? openCloudApiKeyInput.value : '',
+            groupId: groupIdInput ? groupIdInput.value : '',
+            autoDetectCookie: autoDetectCookieToggle ? autoDetectCookieToggle.checked : false,
+            spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
+            enableSpoofing: enableSpoofingToggle ? enableSpoofingToggle.checked : true,
+            downloadOnly: downloadOnlyToggle ? downloadOnlyToggle.checked : false,
+            downloadFolder: downloadFolderInput ? downloadFolderInput.value : '',
+            defaultOutputFolder: defaultOutputFolderInput ? defaultOutputFolderInput.value : '',
+            autoSaveSessions: autoSaveSessionsToggle ? autoSaveSessionsToggle.checked : true,
+            uploadConcurrency: uploadConcurrencyInput ? clampNumberInput(uploadConcurrencyInput) : 10,
+            downloadConcurrency: downloadConcurrencyInput ? clampNumberInput(downloadConcurrencyInput) : 10,
+            maxPlaceIds: parseInt(maxPlaceIdsInput ? maxPlaceIdsInput.value : 10, 10) || 10,
+            maxPlaceIdRetries: parseInt(maxPlaceIdRetriesInput ? maxPlaceIdRetriesInput.value : 3, 10) || 3,
+            overridePlaceId: overridePlaceIdInput ? overridePlaceIdInput.value.trim() : '',
+            uploadRetries: parseInt(uploadRetriesInput ? uploadRetriesInput.value : 3, 10) || 3,
+            uploadRetryDelay: parseInt(uploadRetryDelayInput ? uploadRetryDelayInput.value : 5000, 10) || 5000,
+        };
+    }
+    function applyProfile(profile) {
+        if (!profile) return;
+        if (robloxCookieInput && typeof profile.robloxCookie === 'string') robloxCookieInput.value = profile.robloxCookie;
+        if (openCloudApiKeyInput && typeof profile.apiKey === 'string') openCloudApiKeyInput.value = profile.apiKey;
+        if (groupIdInput && typeof profile.groupId === 'string') groupIdInput.value = profile.groupId;
+        if (autoDetectCookieToggle) autoDetectCookieToggle.checked = !!profile.autoDetectCookie;
+        if (spoofSoundsToggle) spoofSoundsToggle.checked = !!profile.spoofSounds;
+        if (enableSpoofingToggle) enableSpoofingToggle.checked = profile.enableSpoofing !== false;
+        if (downloadOnlyToggle) downloadOnlyToggle.checked = !!profile.downloadOnly;
+        if (downloadFolderInput && typeof profile.downloadFolder === 'string') downloadFolderInput.value = profile.downloadFolder;
+        if (defaultOutputFolderInput && typeof profile.defaultOutputFolder === 'string') defaultOutputFolderInput.value = profile.defaultOutputFolder;
+        if (autoSaveSessionsToggle && typeof profile.autoSaveSessions === 'boolean') autoSaveSessionsToggle.checked = profile.autoSaveSessions;
+        if (uploadConcurrencyInput && profile.uploadConcurrency) uploadConcurrencyInput.value = profile.uploadConcurrency;
+        if (downloadConcurrencyInput && profile.downloadConcurrency) downloadConcurrencyInput.value = profile.downloadConcurrency;
+        if (maxPlaceIdsInput && profile.maxPlaceIds) maxPlaceIdsInput.value = profile.maxPlaceIds;
+        if (maxPlaceIdRetriesInput && profile.maxPlaceIdRetries) maxPlaceIdRetriesInput.value = profile.maxPlaceIdRetries;
+        if (overridePlaceIdInput && typeof profile.overridePlaceId === 'string') overridePlaceIdInput.value = profile.overridePlaceId;
+        if (uploadRetriesInput && profile.uploadRetries) uploadRetriesInput.value = profile.uploadRetries;
+        if (uploadRetryDelayInput && profile.uploadRetryDelay) uploadRetryDelayInput.value = profile.uploadRetryDelay;
+        saveSettings({
+            defaultOutputFolder: defaultOutputFolderInput ? defaultOutputFolderInput.value : '',
+            autoSaveSessions: autoSaveSessionsToggle ? autoSaveSessionsToggle.checked : true,
+            uploadConcurrency: uploadConcurrencyInput ? clampNumberInput(uploadConcurrencyInput) : 10,
+            downloadConcurrency: downloadConcurrencyInput ? clampNumberInput(downloadConcurrencyInput) : 10,
+        });
+        updateRobloxCookieInputState();
+        updateDownloadOnlyState();
+        updateProfileStatus('Profile applied.');
+    }
+    function saveCurrentProfile() {
+        const profiles = getProfiles();
+        profiles[getCurrentProfileId()] = profilePayloadFromForm();
+        writeJsonStorage(PROFILES_KEY, profiles);
+        localStorage.setItem(SELECTED_PROFILE_KEY, getCurrentProfileId());
+        updateProfileStatus('Profile saved.');
+    }
+    function resetRunReportView() {
+        if (runReportMode) runReportMode.textContent = 'No run yet';
+        if (runReportGrid) runReportGrid.innerHTML = '';
+        if (runReportFailures) runReportFailures.innerHTML = '<div class="report-placeholder">Run a batch to see the report here.</div>';
+        if (reportMenuBtn) reportMenuBtn.classList.remove('has-items');
+        if (reportMonitorBtn) reportMonitorBtn.classList.remove('active');
+    }
+    function getReportCardClass(label, value) {
+        const text = String(label || '').toLowerCase();
+        const numeric = Number(String(value).split('/')[0]);
+        if (text.includes('fail') && numeric > 0) return 'bad';
+        if (text.includes('skip') && numeric > 0) return 'warn';
+        if (text.includes('download') || text.includes('upload') || text.includes('cache')) return 'good';
+        return '';
+    }
+    function renderRunReport(summary) {
+        if (!runReportPanel || !runReportGrid || !summary) return;
+        const mode = summary.mode || (summary.downloadOnly ? 'Download only' : 'Download + upload');
+        const duration = summary.durationSeconds ? `${summary.durationSeconds}s` : '0s';
+        if (runReportMode) runReportMode.textContent = `${mode} • ${duration}`;
+        if (reportMenuBtn) reportMenuBtn.classList.add('has-items');
+        if (reportMonitorBtn) reportMonitorBtn.classList.add('active');
+
+        const uploadTarget = Math.max(0, (summary.total ?? 0) - (summary.downloadFailures ?? 0));
+        const cards = [
+            ['Total', summary.total ?? 0],
+            ['Downloaded', `${summary.downloaded ?? 0}/${summary.total ?? 0}`],
+            ['Uploaded', summary.downloadOnly ? 'Skipped' : `${summary.uploaded ?? 0}/${uploadTarget}`],
+            ['Failures', (summary.downloadFailures || 0) + (summary.uploadFailures || 0)],
+            ['Cached', summary.cached || 0],
+            ['Skipped', summary.skippedUploads || 0],
+        ].filter(([, value]) => {
+            const text = String(value);
+            return text.includes('/') || (value !== 0 && value !== '0' && value !== '0/0' && value !== 'Skipped');
+        });
+
+        const finalCards = cards.length ? cards : [['Total', summary.total ?? 0]];
+        runReportGrid.innerHTML = finalCards.map(([label, value]) => {
+            const safeValue = escapeHtml(value);
+            const cls = getReportCardClass(label, value);
+            return `<div class="report-card ${cls}"><span>${escapeHtml(label)}</span><strong>${safeValue}</strong></div>`;
+        }).join('');
+
+        if (runReportFailures) {
+            const failures = Array.isArray(summary.failures) ? summary.failures : [];
+            const categories = summary.failureCategories || {};
+            const categoryLine = Object.keys(categories).length
+                ? `<div class="report-failure-summary">${Object.entries(categories).map(([k,v]) => `<span class="report-pill">${escapeHtml(k)} · ${v}</span>`).join('')}</div>`
+                : '';
+            if (!failures.length && !Object.keys(categories).length) {
+                runReportFailures.innerHTML = '<div class="report-empty">No failures in this run.</div>';
+                return;
+            }
+            const rows = failures.slice(0, 10).map(f => `
+                <div class="report-failure-row">
+                  <div class="report-stage">${escapeHtml(f.stage || 'Item')}</div>
+                  <div class="report-failure-main">
+                    <div class="report-failure-name">${escapeHtml(f.name || f.id || 'Asset')}</div>
+                    <div class="report-failure-reason"><strong>${escapeHtml(f.category || 'Unknown error')}</strong> — ${escapeHtml(f.reason || '')}</div>
+                  </div>
+                </div>`).join('');
+            runReportFailures.innerHTML = categoryLine + rows + (failures.length > 10 ? `<div class="report-failure-reason">+${failures.length - 10} more failure(s)</div>` : '');
+        }
+    }
+    ensureDefaultProfiles();
+    if (profileSelect) {
+        const selectedProfile = localStorage.getItem(SELECTED_PROFILE_KEY);
+        if (selectedProfile && profileSelect.querySelector(`option[value=\"${selectedProfile}\"]`)) {
+            profileSelect.value = selectedProfile;
+        }
+        const startupProfile = getProfiles()[getCurrentProfileId()];
+        if (startupProfile && Object.keys(startupProfile).length) applyProfile(startupProfile);
+    }
+    applySettings(readSettings());
+
+    // --- Batch Queue Manager ---
+    const queueItems = new Map();
+    function resetQueue() {
+        queueItems.clear();
+        lastFailedAnimationIdInput = '';
+        if (retryFailedBtn) retryFailedBtn.disabled = true;
+        renderQueue();
+    }
+    function upsertQueueItem(update) {
+        if (!update || !update.id) return;
+        const existing = queueItems.get(update.id) || {};
+        queueItems.set(update.id, { ...existing, ...update });
+        renderQueue();
+    }
+    function renderQueue() {
+        if (!queueList || !queueSummary) return;
+        const items = Array.from(queueItems.values());
+        const counts = items.reduce((acc, item) => {
+            const status = item.status || 'queued';
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+        }, {});
+        const total = items.length;
+        const active = (counts.processing || 0) + (counts.cooldown || 0) + (counts.queued || 0);
+        const failed = counts.error || 0;
+        const completed = counts.completed || 0;
+
+        queueSummary.textContent = total
+            ? `${total} item(s) • ${completed} done • ${active} active • ${failed} failed`
+            : 'No active queue.';
+
+        if (queueCounts) {
+            queueCounts.innerHTML = total ? [
+                ['Total', total],
+                ['Processing', counts.processing || 0],
+                ['Queued', counts.queued || 0],
+                ['Cooldown', counts.cooldown || 0],
+                ['Failed', failed],
+                ['Completed', completed],
+            ].filter(([, value]) => value > 0 || value === total).map(([label, value]) => `<span class="queue-chip">${escapeHtml(label)} <strong>${value}</strong></span>`).join('') : '';
+        }
+
+        [queueTitleCount, queueMonitorCount].forEach((el) => {
+            if (!el) return;
+            el.textContent = String(total);
+            el.style.display = total ? 'inline-flex' : 'none';
+        });
+        if (queueMenuBtn) queueMenuBtn.classList.toggle('has-items', total > 0);
+        if (queueMonitorBtn) queueMonitorBtn.classList.toggle('active', total > 0);
+
+        if (!total) {
+            queueList.innerHTML = '<div class="queue-empty">Queue is empty.</div>';
+            return;
+        }
+
+        queueList.innerHTML = '';
+        const sorted = items.slice().sort((a, b) => {
+            const order = { processing: 0, cooldown: 1, queued: 2, error: 3, completed: 4 };
+            return (order[a.status] ?? 9) - (order[b.status] ?? 9);
+        });
+        for (const item of sorted.slice(0, 100)) {
+            const row = document.createElement('div');
+            const status = item.status || 'queued';
+            row.className = `queue-row ${status}`;
+            const progress = Math.max(0, Math.min(100, Number(item.progress || 0)));
+            const direction = item.direction ? String(item.direction) : 'asset';
+            const assetId = item.originalAssetId || item.assetId || item.id || '';
+            const cooldown = item.cooldownRemaining ? ` • ${item.cooldownRemaining}s` : '';
+            row.title = item.error || item.message || item.name || '';
+            row.innerHTML = `
+                <div class="queue-row-main">
+                  <div class="queue-row-name">${escapeHtml(item.name || assetId || 'Asset')}</div>
+                  <div class="queue-row-meta">${escapeHtml(direction)}${assetId ? ` • ${escapeHtml(assetId)}` : ''}${item.message ? ` • ${escapeHtml(item.message)}` : ''}</div>
+                </div>
+                <div class="queue-status ${status}">${escapeHtml(status)}${cooldown}</div>
+                <div class="queue-progress-line">
+                  <div class="queue-progress-track"><div class="queue-progress-bar" style="width:${progress}%"></div></div>
+                  <div class="queue-progress-text">${progress}%</div>
+                </div>
+            `;
+            queueList.appendChild(row);
+        }
+        if (sorted.length > 100) {
+            const extra = document.createElement('div');
+            extra.className = 'queue-empty';
+            extra.textContent = `+${sorted.length - 100} more item(s)`;
+            queueList.appendChild(extra);
+        }
+    }
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+    }
+    function collectFormData(overrides = {}) {
+        return {
+            animationId: animationIdTextarea ? animationIdTextarea.value : '',
+            robloxCookie: robloxCookieInput ? robloxCookieInput.value : '',
+            apiKey: openCloudApiKeyInput ? openCloudApiKeyInput.value.trim() : '',
+            groupId: groupIdInput ? groupIdInput.value : '',
+            maxPlaceIds: parseInt(maxPlaceIdsInput ? maxPlaceIdsInput.value : 10) || 10,
+            maxPlaceIdRetries: parseInt(maxPlaceIdRetriesInput ? maxPlaceIdRetriesInput.value : 3) || 3,
+            overridePlaceId: overridePlaceIdInput ? (overridePlaceIdInput.value.trim() || null) : null,
+            uploadRetries: parseInt(uploadRetriesInput ? uploadRetriesInput.value : 3) || 3,
+            uploadRetryDelay: parseInt(uploadRetryDelayInput ? uploadRetryDelayInput.value : 5000) || 5000,
+            uploadConcurrency: uploadConcurrencyInput ? clampNumberInput(uploadConcurrencyInput) : 10,
+            downloadConcurrency: downloadConcurrencyInput ? clampNumberInput(downloadConcurrencyInput) : 10,
+            autoSaveSession: autoSaveSessionsToggle ? autoSaveSessionsToggle.checked : true,
+            enableSpoofing: enableSpoofingToggle ? enableSpoofingToggle.checked : true,
+            autoDetectCookie: autoDetectCookieToggle ? autoDetectCookieToggle.checked : false,
+            spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
+            downloadOnly: downloadOnlyToggle ? downloadOnlyToggle.checked : false,
+            downloadFolder: downloadFolderInput ? downloadFolderInput.value : '',
+            ...overrides,
+        };
+    }
+    if (window.electronAPI && window.electronAPI.onTransferUpdate) {
+        window.electronAPI.onTransferUpdate(upsertQueueItem);
+    }
+    if (clearQueueBtn) {
+        clearQueueBtn.addEventListener('click', resetQueue);
+    }
+    if (retryFailedBtn) {
+        retryFailedBtn.addEventListener('click', () => {
+            if (!lastFailedAnimationIdInput.trim()) return;
+            animationIdTextarea.value = lastFailedAnimationIdInput;
+            outputDataTextarea.value = '';
+            resetQueue();
+            resetRunReportView();
+            runSpooferBtn.disabled = true;
+            if (pauseBtn) { pauseBtn.style.display = 'inline-block'; pauseBtn.textContent = '⏸ Pause'; _paused = false; }
+            updateStatus('Retrying failed items...');
+            window.electronAPI.runSpooferAction(collectFormData({ animationId: lastFailedAnimationIdInput }));
+        });
+    }
+
+    if (autoSaveSessionsToggle) autoSaveSessionsToggle.addEventListener('change', () => saveSettings({ autoSaveSessions: autoSaveSessionsToggle.checked }));
+    function saveConcurrencySetting(input, key) {
+        const value = clampNumberInput(input);
+        saveSettings({ [key]: value });
+        return value;
+    }
+    if (uploadConcurrencyInput) {
+        uploadConcurrencyInput.addEventListener('change', () => saveConcurrencySetting(uploadConcurrencyInput, 'uploadConcurrency'));
+        uploadConcurrencyInput.addEventListener('blur', () => saveConcurrencySetting(uploadConcurrencyInput, 'uploadConcurrency'));
+    }
+    if (downloadConcurrencyInput) {
+        downloadConcurrencyInput.addEventListener('change', () => saveConcurrencySetting(downloadConcurrencyInput, 'downloadConcurrency'));
+        downloadConcurrencyInput.addEventListener('blur', () => saveConcurrencySetting(downloadConcurrencyInput, 'downloadConcurrency'));
+    }
+    document.querySelectorAll('.stepper-btn[data-stepper-target]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const input = document.getElementById(btn.dataset.stepperTarget);
+            if (!input) return;
+            const step = parseInt(btn.dataset.step || '1', 10) || 1;
+            input.value = String((parseInt(input.value, 10) || Number(input.min || 1)) + step);
+            const key = input.id === 'downloadConcurrency' ? 'downloadConcurrency' : 'uploadConcurrency';
+            saveConcurrencySetting(input, key);
+            input.focus();
+        });
+    });
+    if (defaultFolderBrowseBtn) {
+        defaultFolderBrowseBtn.addEventListener('click', async () => {
+            const folder = await window.electronAPI?.selectFolder?.();
+            if (folder) saveSettings({ defaultOutputFolder: folder });
+        });
+    }
+    if (saveProfileBtn) saveProfileBtn.addEventListener('click', saveCurrentProfile);
+    if (applyProfileBtn) applyProfileBtn.addEventListener('click', () => applyProfile(getProfiles()[getCurrentProfileId()]));
+    if (profileSelect) profileSelect.addEventListener('change', () => {
+        localStorage.setItem(SELECTED_PROFILE_KEY, getCurrentProfileId());
+        const profile = getProfiles()[getCurrentProfileId()];
+        if (profile && Object.keys(profile).length) applyProfile(profile);
+        else updateProfileStatus('No saved data for this profile yet.');
+    });
+    if (getOpenCloudKeyBtn) {
+        getOpenCloudKeyBtn.addEventListener('click', () => {
+            window.electronAPI?.openExternal?.('https://create.roblox.com/dashboard/credentials');
+        });
+    }
+
+    if (settingsOpenLogsBtn) settingsOpenLogsBtn.addEventListener('click', () => window.electronAPI?.openLogsFolder?.());
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener('click', async () => {
+            resetQueue();
+            resetRunReportView();
+            if (outputDataTextarea) outputDataTextarea.value = '';
+            lastFailedAnimationIdInput = '';
+            await window.electronAPI?.clearAppHistory?.();
+            updateStatus('History cleared.');
+        });
+    }
+    if (resetSettingsBtn) {
+        resetSettingsBtn.addEventListener('click', () => {
+            localStorage.removeItem(SETTINGS_KEY);
+            localStorage.removeItem(PROFILES_KEY);
+            applySettings(DEFAULT_SETTINGS);
+            updateStatus('Settings reset.');
+        });
     }
 
     // --- IPC for Status Updates from Main ---
@@ -748,7 +1937,6 @@
       if (window.electronAPI && window.electronAPI.openExternal) {
         window.electronAPI.openExternal(invite);
       } else {
-        // Fallback for non-electron environments
         window.open(invite, '_blank', 'noopener');
       }
     });
@@ -778,7 +1966,9 @@
     if (window.electronAPI && window.electronAPI.checkSession) {
       window.electronAPI.checkSession().then(session => {
         if (session && session.animationIdInput) {
-          const pending = (session.totalCount || 0) - (session.completedMappings || []).length;
+          const pending = session.retryAnimationIdInput
+            ? session.retryAnimationIdInput.split('\n').filter(Boolean).length
+            : ((session.totalCount || 0) - (session.completedMappings || []).length);
           if (pending > 0) {
             _pendingSessionData = session;
             sessionPendingCount.textContent = pending;
@@ -795,19 +1985,10 @@
     document.getElementById('session-resume-btn')?.addEventListener('click', () => {
       if (!_pendingSessionData) return;
       sessionBanner.style.display = 'none';
-      // Collect current form values and resume
-      const data = {
-        animationId: animationIdTextarea ? animationIdTextarea.value : '',
-        robloxCookie: robloxCookieInput ? robloxCookieInput.value : '',
-        apiKey: document.getElementById('openCloudApiKey')?.value || '',
-        groupId: groupIdInput ? groupIdInput.value : '',
-        enableSpoofing: enableSpoofingToggle ? enableSpoofingToggle.checked : true,
-        autoDetectCookie: autoDetectCookieToggle ? autoDetectCookieToggle.checked : false,
-        spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
-        downloadOnly: downloadOnlyToggle ? downloadOnlyToggle.checked : false,
-        downloadFolder: downloadFolderInput ? downloadFolderInput.value : '',
-        resumeSession: true,
-      };
+      const retryInput = _pendingSessionData.retryAnimationIdInput || _pendingSessionData.animationIdInput || '';
+      if (animationIdTextarea && retryInput) animationIdTextarea.value = retryInput;
+      const data = collectFormData({ animationId: retryInput, resumeSession: true });
+      resetQueue();
       runSpooferBtn.disabled = true;
       pauseBtn.style.display = 'inline-block';
       window.electronAPI.resumeSession(data);
@@ -820,7 +2001,12 @@
             if (outputDataTextarea && result && typeof result.output !== 'undefined') {
                 outputDataTextarea.value = result.output;
             }
-            // Re-enable the button after operation
+            lastFailedAnimationIdInput = (result && result.failedAnimationIdInput) ? result.failedAnimationIdInput : '';
+            if (retryFailedBtn) {
+                retryFailedBtn.disabled = !lastFailedAnimationIdInput.trim();
+                retryFailedBtn.textContent = lastFailedAnimationIdInput.trim() ? `Retry Failed (${result.failedCount || 0})` : 'Retry Failed';
+            }
+            if (result && result.summary) renderRunReport(result.summary);
             if (runSpooferBtn) runSpooferBtn.disabled = false;
             if (pauseBtn) { pauseBtn.style.display = 'none'; pauseBtn.textContent = '⏸ Pause'; _paused = false; }
         });
@@ -838,7 +2024,7 @@
       console.warn("electronAPI.close not found.");
       if (closeBtn) closeBtn.disabled = true;
     }
-    // Add minimize if you have a minimize button and exposed it via preload
+
 
     // --- Copy Output Button ---
     if (copyOutputBtn && outputDataTextarea) {
@@ -914,7 +2100,7 @@
                         currentAudioQuota = await fetchAudioQuota();
                         updateAudioQuotaDisplay();
                     }
-                }, 500); // Wait 500ms after user stops typing
+                }, 500);
             }
         });
     }
@@ -922,6 +2108,7 @@
     // --- Spoof Sounds Toggle Logic ---
     const audioQuotaInfo = document.getElementById('audio-quota-info');
     const audioQuotaText = document.getElementById('audio-quota-text');
+    const assetInputHint = document.getElementById('assetInputHint');
     let currentAudioQuota = null;
 
     async function fetchAudioQuota() {
@@ -1022,11 +2209,13 @@
         spoofSoundsToggle.addEventListener('change', async () => {
             if (spoofSoundsToggle.checked) {
                 assetIdLabel.textContent = 'Sound Id Input';
+                if (assetInputHint) assetInputHint.textContent = 'Paste sound IDs, Roblox URLs, or formatted batch lines.';
                 animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Sound ID';
                 audioQuotaInfo.style.display = 'none';
             } else {
                 assetIdLabel.textContent = 'Animation Id Input';
+                if (assetInputHint) assetInputHint.textContent = 'Paste animation IDs, Roblox URLs, or formatted batch lines.';
                 animationIdTextarea.placeholder = 'Format: [123456][Name][User123] (or Group123) per line';
                 pasteAnimationIdBtn.title = 'Paste Animation ID';
                 audioQuotaInfo.style.display = 'none';
@@ -1049,23 +2238,14 @@
             if (pauseBtn) { pauseBtn.style.display = 'inline-block'; pauseBtn.textContent = '⏸ Pause'; _paused = false; }
             updateStatus("Initiating spoofer...");
             outputDataTextarea.value = ""; // Clear previous output
+            resetQueue();
+            resetRunReportView();
 
-            const data = {
-                animationId: animationIdTextarea.value,
-                robloxCookie: robloxCookieInput.value,
-                apiKey: openCloudApiKeyInput ? openCloudApiKeyInput.value.trim() : '',
-                groupId: groupIdInput.value,
-                maxPlaceIds: parseInt(maxPlaceIdsInput.value) || 10,
-                maxPlaceIdRetries: parseInt(maxPlaceIdRetriesInput.value) || 3,
-                overridePlaceId: overridePlaceIdInput.value.trim() || null,
-                uploadRetries: parseInt(uploadRetriesInput ? uploadRetriesInput.value : 3) || 3,
-                uploadRetryDelay: parseInt(uploadRetryDelayInput ? uploadRetryDelayInput.value : 5000) || 5000,
-                enableSpoofing: enableSpoofingToggle.checked,
-                autoDetectCookie: autoDetectCookieToggle.checked,
-                spoofSounds: spoofSoundsToggle ? spoofSoundsToggle.checked : false,
-                downloadOnly: downloadOnlyToggle ? downloadOnlyToggle.checked : false,
-                downloadFolder: downloadFolderInput ? downloadFolderInput.value : ''
-            };
+            const settings = readSettings();
+            if (downloadOnlyToggle && downloadOnlyToggle.checked && downloadFolderInput && !downloadFolderInput.value && settings.defaultOutputFolder) {
+                downloadFolderInput.value = settings.defaultOutputFolder;
+            }
+            const data = collectFormData();
 
             console.log("Renderer sending data to main:", data);
             window.electronAPI.runSpooferAction(data);
@@ -1076,25 +2256,28 @@
     }
 
     // --- Download Only Toggle Logic ---
-    if (downloadOnlyToggle && downloadFolderGroup && enableSpoofingToggle && groupIdInput) {
-        downloadOnlyToggle.addEventListener('change', () => {
-            if (downloadOnlyToggle.checked) {
-                // Show folder selector
-                downloadFolderGroup.style.display = 'block';
-                // Disable spoofing options
-                enableSpoofingToggle.checked = false;
-                enableSpoofingToggle.disabled = true;
-                groupIdInput.disabled = true;
-                groupIdInput.classList.add('disabled-input');
-            } else {
-                // Hide folder selector
-                downloadFolderGroup.style.display = 'none';
-                // Re-enable spoofing options
-                enableSpoofingToggle.disabled = false;
-                groupIdInput.disabled = false;
-                groupIdInput.classList.remove('disabled-input');
+    function updateDownloadOnlyState() {
+        if (!downloadOnlyToggle || !downloadFolderGroup || !enableSpoofingToggle || !groupIdInput) return;
+        if (downloadOnlyToggle.checked) {
+            downloadFolderGroup.style.display = 'block';
+            enableSpoofingToggle.checked = false;
+            enableSpoofingToggle.disabled = true;
+            groupIdInput.disabled = true;
+            groupIdInput.classList.add('disabled-input');
+            const settings = readSettings();
+            if (downloadFolderInput && !downloadFolderInput.value && settings.defaultOutputFolder) {
+                downloadFolderInput.value = settings.defaultOutputFolder;
             }
-        });
+        } else {
+            downloadFolderGroup.style.display = 'none';
+            enableSpoofingToggle.disabled = false;
+            groupIdInput.disabled = false;
+            groupIdInput.classList.remove('disabled-input');
+        }
+    }
+    if (downloadOnlyToggle && downloadFolderGroup && enableSpoofingToggle && groupIdInput) {
+        downloadOnlyToggle.addEventListener('change', updateDownloadOnlyState);
+        updateDownloadOnlyState();
     }
 
     // --- Folder Selection Button ---
@@ -1119,6 +2302,43 @@
         el.style.webkitUserSelect = 'text';
         el.style.userSelect = 'text';
     });
+
+    // --- Anchored Tooltip Logic ---
+    const appTooltip = document.getElementById('app-tooltip');
+    function positionTooltipFor(trigger) {
+        if (!appTooltip || !trigger) return;
+        const text = trigger.dataset.tooltip || trigger.getAttribute('title') || '';
+        if (!text) return;
+        appTooltip.textContent = text;
+        appTooltip.classList.add('visible');
+        const triggerRect = trigger.getBoundingClientRect();
+        const tipRect = appTooltip.getBoundingClientRect();
+        const margin = 12;
+        let left = triggerRect.left + (triggerRect.width / 2) - (tipRect.width / 2);
+        left = Math.max(margin, Math.min(left, window.innerWidth - tipRect.width - margin));
+        let top = triggerRect.bottom + 8;
+        if (top + tipRect.height > window.innerHeight - margin) {
+            top = triggerRect.top - tipRect.height - 8;
+        }
+        top = Math.max(margin, Math.min(top, window.innerHeight - tipRect.height - margin));
+        appTooltip.style.left = `${left}px`;
+        appTooltip.style.top = `${top}px`;
+    }
+    function hideTooltip() {
+        if (appTooltip) appTooltip.classList.remove('visible');
+    }
+    document.querySelectorAll('.tooltip-icon').forEach(icon => {
+        const text = icon.getAttribute('title') || icon.dataset.tooltip || '';
+        icon.dataset.tooltip = text;
+        icon.removeAttribute('title');
+        icon.tabIndex = 0;
+        icon.addEventListener('mouseenter', () => positionTooltipFor(icon));
+        icon.addEventListener('focus', () => positionTooltipFor(icon));
+        icon.addEventListener('mouseleave', hideTooltip);
+        icon.addEventListener('blur', hideTooltip);
+    });
+    window.addEventListener('scroll', hideTooltip, true);
+    window.addEventListener('resize', hideTooltip);
 
     // Initial ready status
     updateStatus("Ready");
