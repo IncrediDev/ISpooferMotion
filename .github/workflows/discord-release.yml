@@ -15,34 +15,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set release info
+        id: release_info
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "url=https://github.com/${{ github.repository }}/releases/tag/${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            echo "url=${{ github.event.release.html_url }}" >> "$GITHUB_OUTPUT"
+            echo "name=${{ github.event.release.name }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ github.event.release.prerelease }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Debug release info
+        run: |
+          echo "event=${{ github.event_name }}"
+          echo "tag=${{ steps.release_info.outputs.tag }}"
+          echo "url=${{ steps.release_info.outputs.url }}"
+          echo "name=${{ steps.release_info.outputs.name }}"
+
       - name: Checkout tagged release
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ steps.release_info.outputs.tag }}
 
       - name: Post tagged changelog to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_NAME: ${{ github.event.release.name }}
-          RELEASE_URL: ${{ github.event.release.html_url }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ steps.release_info.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release_info.outputs.name }}
+          RELEASE_URL: ${{ steps.release_info.outputs.url }}
+          RELEASE_PRERELEASE: ${{ steps.release_info.outputs.prerelease }}
         run: |
           python3 <<'PY'
           import json
           import os
           import re
-          import sys
           import urllib.request
 
           webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-          release_tag = os.environ["RELEASE_TAG"].strip()
+          release_tag = os.environ.get("RELEASE_TAG", "").strip()
           release_name = os.environ.get("RELEASE_NAME", "").strip() or release_tag
-          release_url = os.environ["RELEASE_URL"].strip()
+          release_url = os.environ.get("RELEASE_URL", "").strip()
           prerelease = os.environ.get("RELEASE_PRERELEASE") == "true"
 
           if not webhook_url:
               raise RuntimeError("Missing DISCORD_RELEASE_WEBHOOK secret.")
+
+          if not release_tag:
+              raise RuntimeError("Missing release tag.")
 
           changelog_path = "CHANGELOG.md"
 
@@ -53,10 +77,11 @@ jobs:
               changelog = file.read()
 
           escaped_tag = re.escape(release_tag)
+          escaped_no_v = re.escape(release_tag.lstrip("v"))
 
           patterns = [
               rf"^##\s+\[?{escaped_tag}\]?\s*$",
-              rf"^##\s+\[?v?{re.escape(release_tag.lstrip('v'))}\]?\s*$",
+              rf"^##\s+\[?v?{escaped_no_v}\]?\s*$",
           ]
 
           match = None
@@ -80,16 +105,13 @@ jobs:
           if len(version_changelog) > 3500:
               version_changelog = version_changelog[:3450].rstrip() + "\n\n...changelog trimmed. View the full release on GitHub."
 
-          title = f"{release_name} Released"
-          color = 16753920 if prerelease else 5763719
-
           payload = {
               "embeds": [
                   {
-                      "title": title,
+                      "title": f"{release_name} Released",
                       "url": release_url,
                       "description": version_changelog,
-                      "color": color,
+                      "color": 16753920 if prerelease else 5763719,
                       "fields": [
                           {
                               "name": "Version",
