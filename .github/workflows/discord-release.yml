@@ -1,4 +1,4 @@
-name: Post Release To Discord
+name: Post Release to Discord
 
 on:
   release:
@@ -6,16 +6,20 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to post"
+        description: 'Release tag to post'
         required: true
-        default: "v1.2.16"
+        default: 'v1.3.0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
 
 jobs:
   discord-release:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
 
     steps:
       - name: Set release info
@@ -34,7 +38,7 @@ jobs:
           fi
 
       - name: Checkout tagged release
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ steps.release_info.outputs.tag }}
 
@@ -47,11 +51,13 @@ jobs:
           RELEASE_NAME: ${{ steps.release_info.outputs.name }}
           RELEASE_URL: ${{ steps.release_info.outputs.url }}
           RELEASE_PRERELEASE: ${{ steps.release_info.outputs.prerelease }}
+          DISCORD_RELEASE_ROLE_ID: '1457029900291670210'
         run: |
           python3 <<'PY'
           import json
           import os
           import re
+          import time
           import urllib.request
 
           webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
@@ -61,10 +67,10 @@ jobs:
           release_name = os.environ.get("RELEASE_NAME", "").strip() or release_tag
           release_url = os.environ.get("RELEASE_URL", "").strip()
           prerelease = os.environ.get("RELEASE_PRERELEASE") == "true"
+          role_id = os.environ.get("DISCORD_RELEASE_ROLE_ID", "").strip()
 
           if not webhook_url:
               raise RuntimeError("Missing DISCORD_RELEASE_WEBHOOK secret.")
-
           if not release_tag:
               raise RuntimeError("Missing release tag.")
 
@@ -75,16 +81,84 @@ jobs:
                       "Accept": "application/vnd.github+json",
                       "Authorization": f"Bearer {github_token}",
                       "X-GitHub-Api-Version": "2022-11-28",
-                      "User-Agent": "ISpooferMotion-Release-Webhook"
-                  }
+                      "User-Agent": "ISpooferMotion-Release-Webhook",
+                  },
               )
-
               with urllib.request.urlopen(request) as response:
                   return json.loads(response.read().decode("utf-8"))
 
+          def get_release_by_tag():
+              if not repo or not release_tag or not github_token:
+                  return {}
+              try:
+                  return github_api(f"/repos/{repo}/releases/tags/{release_tag}")
+              except Exception:
+                  return {}
+
+          def download_github_asset(asset):
+              request = urllib.request.Request(
+                  asset["url"],
+                  headers={
+                      "Accept": "application/octet-stream",
+                      "Authorization": f"Bearer {github_token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "ISpooferMotion-Release-Webhook",
+                  },
+              )
+              with urllib.request.urlopen(request) as response:
+                  return response.read().decode("utf-8")
+
+          def read_virustotal_links():
+              asset = None
+              release = {}
+              for attempt in range(6):
+                  release = get_release_by_tag()
+                  assets = release.get("assets") or []
+                  asset = next((item for item in assets if item.get("name") == "virustotal-links.json"), None)
+                  if asset:
+                      break
+                  if attempt < 5:
+                      time.sleep(10)
+
+              if not asset:
+                  return "VirusTotal results were not attached to this release."
+
+              try:
+                  payload = json.loads(download_github_asset(asset))
+              except Exception:
+                  return f"[Open VirusTotal report asset]({asset.get('browser_download_url', release_url)})"
+
+              if isinstance(payload, list):
+                  rows = payload
+                  skipped = False
+                  skipped_reason = ""
+              else:
+                  rows = payload.get("assets") or []
+                  skipped = bool(payload.get("skipped"))
+                  skipped_reason = payload.get("skippedReason") or ""
+
+              if skipped:
+                  return f"VirusTotal upload skipped: {skipped_reason or 'not configured'}."
+
+              lines = []
+              for row in rows:
+                  name = row.get("name", "Release asset")
+                  url = row.get("fileUrl") or row.get("file_url") or row.get("analysisUrl") or row.get("analysis_url")
+                  sha256 = row.get("sha256", "")
+                  if url:
+                      short_hash = sha256[:12] if sha256 else "scan"
+                      lines.append(f"[`{name}`]({url}) `{short_hash}`")
+
+              if not lines:
+                  return f"[Open VirusTotal report asset]({asset.get('browser_download_url', release_url)})"
+
+              value = "\n".join(lines)
+              if len(value) > 1000:
+                  return f"Too many VirusTotal links to fit cleanly here. [Open the full report]({asset.get('browser_download_url', release_url)})"
+              return value
+
           def read_version_changelog():
               changelog_path = "CHANGELOG.md"
-
               if not os.path.exists(changelog_path):
                   raise RuntimeError("CHANGELOG.md was not found in the tagged release.")
 
@@ -93,7 +167,6 @@ jobs:
 
               escaped_tag = re.escape(release_tag)
               escaped_no_v = re.escape(release_tag.lstrip("v"))
-
               patterns = [
                   rf"^##\s+\[?{escaped_tag}\]?\s*$",
                   rf"^##\s+\[?v?{escaped_no_v}\]?\s*$",
@@ -104,27 +177,19 @@ jobs:
                   match = re.search(pattern, changelog, flags=re.MULTILINE)
                   if match:
                       break
-
               if not match:
                   raise RuntimeError(f"No changelog section found for {release_tag}.")
 
               start = match.end()
               next_section = re.search(r"^##\s+", changelog[start:], flags=re.MULTILINE)
               end = start + next_section.start() if next_section else len(changelog)
-
               section = changelog[start:end].strip()
               return section or "No changelog entries were found for this version."
 
           def get_commit_author():
-              fallback = {
-                  "name": "GitHub",
-                  "url": release_url,
-                  "avatar": None
-              }
-
+              fallback = {"name": "GitHub", "url": release_url, "avatar": None}
               if not repo or not github_token:
                   return fallback
-
               try:
                   commit = github_api(f"/repos/{repo}/commits/{release_tag}")
               except Exception:
@@ -132,57 +197,35 @@ jobs:
 
               github_author = commit.get("author") or {}
               commit_author = (commit.get("commit") or {}).get("author") or {}
-
-              name = github_author.get("login") or commit_author.get("name") or "GitHub"
-              url = github_author.get("html_url") or release_url
-              avatar = github_author.get("avatar_url")
-
               return {
-                  "name": name,
-                  "url": url,
-                  "avatar": avatar
+                  "name": github_author.get("login") or commit_author.get("name") or "GitHub",
+                  "url": github_author.get("html_url") or release_url,
+                  "avatar": github_author.get("avatar_url"),
               }
 
           changelog_text = read_version_changelog()
+          virustotal_links = read_virustotal_links()
           author = get_commit_author()
 
-          if len(changelog_text) > 1000:
-              changelog_field = f"[See full changelog]({release_url})"
-          else:
-              changelog_field = changelog_text
-
+          changelog_field = f"Too much changed to fit cleanly here.\n\n[Read the full changelog]({release_url})" if len(changelog_text) > 1000 else changelog_text
           release_type = "Pre-release" if prerelease else "Stable release"
           color = 16753920 if prerelease else 5763719
+          headline = "New test build is ready" if prerelease else "New update is live"
 
           embed = {
-              "author": {
-                  "name": f"Released by {author['name']}",
-                  "url": author["url"]
-              },
-              "title": f"ISpooferMotion {release_tag}",
+              "author": {"name": f"Released by {author['name']}", "url": author["url"]},
+              "title": f"🚀 ISpooferMotion {release_tag}",
               "url": release_url,
-              "description": f"**{release_type}** is now available.\n\n[Download from GitHub]({release_url})",
+              "description": f"**{headline}**\n\nISpooferMotion has been updated. Grab the latest release from GitHub below.",
               "color": color,
               "fields": [
-                  {
-                      "name": "Version",
-                      "value": f"`{release_tag}`",
-                      "inline": True
-                  },
-                  {
-                      "name": "Release type",
-                      "value": release_type,
-                      "inline": True
-                  },
-                  {
-                      "name": "Changelog",
-                      "value": changelog_field,
-                      "inline": False
-                  }
+                  {"name": "📦 Version", "value": f"`{release_tag}`", "inline": True},
+                  {"name": "🧪 Type", "value": release_type, "inline": True},
+                  {"name": "⬇️ Download", "value": f"[Open GitHub Release]({release_url})", "inline": False},
+                  {"name": "🛡️ VirusTotal", "value": virustotal_links, "inline": False},
+                  {"name": "📝 Changelog", "value": changelog_field, "inline": False},
               ],
-              "footer": {
-                  "text": "ISpooferMotion release update"
-              }
+              "footer": {"text": "ISpooferMotion update announcement"},
           }
 
           if author["avatar"]:
@@ -190,23 +233,17 @@ jobs:
 
           payload = {
               "username": "ISpooferMotion Updates",
-              "content": "<@&1457029900291670210> ISpooferMotion has updated! 🥳",
-              "allowed_mentions": {
-                  "parse": ["roles"]
-              },
-              "embeds": [embed]
+              "content": f"<@&{role_id}> ISpooferMotion has updated! 🥳",
+              "allowed_mentions": {"roles": [role_id]},
+              "embeds": [embed],
           }
 
           request = urllib.request.Request(
               webhook_url,
               data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Content-Type": "application/json",
-                  "User-Agent": "ISpooferMotion-Discord-Release-Webhook"
-              },
-              method="POST"
+              headers={"Content-Type": "application/json", "User-Agent": "ISpooferMotion-Discord-Release-Webhook"},
+              method="POST",
           )
-
           with urllib.request.urlopen(request) as response:
               if response.status >= 300:
                   raise RuntimeError(f"Discord webhook failed with status {response.status}")

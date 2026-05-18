@@ -1,4 +1,82 @@
+# Dependencies
 node_modules/
+launcher/node_modules/
+
+# Build output
 dist/
+out/
+release/
+plugin-build/
+dist-plugin/
+*.AppImage
+*.deb
+*.dmg
 *.exe
-release.bat
+*.msi
+*.snap
+*.blockmap
+*.rbxmx
+
+# Electron/build caches
+.cache/
+.vite/
+.parcel-cache/
+.turbo/
+*.tsbuildinfo
+node_modules/.cache/
+launcher/node_modules/.cache/
+launcher/dist/
+launcher/out/
+launcher/.cache/
+launcher/.vite/
+
+# Runtime/generated data
+temp/
+tmp/
+*.part
+*.part-*
+*.tmp
+*.bak
+*.old
+*.log
+logs/
+launcher/logs/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+*.local
+launcher-settings.json
+settings.json
+profiles.json
+session.json
+asset-history.json
+asset-resolution-cache.json
+*.cookie
+*.token
+*.secret
+
+# Package managers
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+
+# Source archives / manual release helpers
+*.zip
+*.7z
+*.rar
+
+# Other
+.prettierignore
+.prettierrc
+/.vscode
+/dev

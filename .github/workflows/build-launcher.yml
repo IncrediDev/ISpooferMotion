@@ -3,34 +3,49 @@ name: Build Launcher Setup
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - 'launcher/**'
-      - 'assets/app_icon.ico'
+      - 'launcher/src/assets/**'
       - '.github/workflows/build-launcher.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-launcher-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-launcher-setup:
+    name: Launcher setup
     runs-on: windows-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: 22
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
 
       - name: Install launcher dependencies
         working-directory: launcher
-        run: npm install
+        run: npm ci
 
-      - name: Build one-file launcher setup
+      - name: Build launcher setup
         working-directory: launcher
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_DISABLE_WIN_CODE_SIGN: true
         run: npm run build:win
 
-      - name: Upload launcher setup artifact
+      - name: Upload launcher setup
         uses: actions/upload-artifact@v4
         with:
           name: ISpooferMotion-Setup
           path: launcher/dist/ISpooferMotion-Setup.exe
+          if-no-files-found: error

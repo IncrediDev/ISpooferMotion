@@ -5,35 +5,75 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag, example v1.3.0'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release-windows:
+    name: Build and publish release
     runs-on: windows-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            'RELEASE_TAG=${{ inputs.version }}' >> $env:GITHUB_ENV
+          } else {
+            'RELEASE_TAG=${{ github.ref_name }}' >> $env:GITHUB_ENV
+          }
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install app dependencies
         run: npm ci
 
-      - name: Rebuild native modules for Electron
-        run: npx electron-rebuild
+      - name: Run tests
+        run: npm test
+
+      - name: Run release sanity check
+        run: npm run release:local-check
+
+      - name: Run release hardening check
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: npm run release:hardening-check
 
       - name: Build managed app EXE
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_DISABLE_WIN_CODE_SIGN: true
         run: npm run build -- --win portable --publish never
 
       - name: Build Roblox Studio plugin
         run: npm run build:plugin
+
+      - name: Setup Node.js cache for launcher
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
 
       - name: Install launcher dependencies
         working-directory: launcher
@@ -41,16 +81,60 @@ jobs:
 
       - name: Build launcher setup EXE
         working-directory: launcher
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_DISABLE_WIN_CODE_SIGN: true
         run: npm run build:win
 
       - name: Build release notes
         run: node scripts/extract-release-notes.js
 
+      - name: Collect release assets
+        id: assets
+        shell: pwsh
+        run: |
+          $files = @(
+            Get-ChildItem launcher/dist/*.exe -ErrorAction SilentlyContinue
+            Get-ChildItem dist/*.exe -ErrorAction SilentlyContinue
+            Get-ChildItem dist/*.rbxmx -ErrorAction SilentlyContinue
+          )
+          if ($files.Count -lt 3) {
+            Write-Error 'Missing one or more release assets.'
+          }
+          $files | ForEach-Object { Write-Host $_.FullName }
+          $joined = ($files | ForEach-Object { $_.FullName }) -join '" "'
+          "paths=$joined" >> $env:GITHUB_OUTPUT
+
+      - name: Upload release assets to VirusTotal
+        env:
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        shell: pwsh
+        run: |
+          $files = @(
+            Get-ChildItem launcher/dist/*.exe -ErrorAction SilentlyContinue
+            Get-ChildItem dist/*.exe -ErrorAction SilentlyContinue
+            Get-ChildItem dist/*.rbxmx -ErrorAction SilentlyContinue
+          )
+          if ($files.Count -lt 3) {
+            Write-Error 'Missing one or more release assets before VirusTotal upload.'
+          }
+          $assetPaths = $files | ForEach-Object { $_.FullName }
+          node scripts/upload-virustotal-release-assets.js @assetPaths
+
+      - name: Verify release assets
+        run: npm run release:verify-assets -- --require-virustotal
+
       - name: Publish release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           body_path: dist/release-notes.md
+          fail_on_unmatched_files: true
           files: |
-            launcher/dist/ISpooferMotion-Setup.exe
-            dist/ISpooferMotion-App-*.exe
-            dist/ISpooferMotion-Plugin-*.rbxmx
+            launcher/dist/*.exe
+            dist/*.exe
+            dist/*.rbxmx
+            dist/virustotal-links.md
+            dist/virustotal-links.json
