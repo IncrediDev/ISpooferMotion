@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release tag, example v1.3.0'
+        description: 'Release tag, example v1.3.10'
         required: true
         type: string
 
@@ -36,6 +36,23 @@ jobs:
             'RELEASE_TAG=${{ inputs.version }}' >> $env:GITHUB_ENV
           } else {
             'RELEASE_TAG=${{ github.ref_name }}' >> $env:GITHUB_ENV
+          }
+
+      - name: Ensure release tag is this commit
+        shell: pwsh
+        run: |
+          git fetch --tags --force
+          $existing = git rev-parse -q --verify "refs/tags/$env:RELEASE_TAG^{commit}" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $existing = $existing.Trim()
+            if ($existing -ne $env:GITHUB_SHA) {
+              Write-Error "Release tag $env:RELEASE_TAG points at $existing, not this workflow commit $env:GITHUB_SHA."
+            }
+          } elseif ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            git tag $env:RELEASE_TAG $env:GITHUB_SHA
+            git push origin "refs/tags/$env:RELEASE_TAG"
+          } else {
+            Write-Error "Release tag $env:RELEASE_TAG was not found after checkout."
           }
 
       - name: Setup Node.js
@@ -84,7 +101,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_BUILDER_DISABLE_WIN_CODE_SIGN: true
-        run: npm run build:win
+        run: npm run build:win:release
 
       - name: Build release notes
         run: node scripts/extract-release-notes.js

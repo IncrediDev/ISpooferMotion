@@ -58,6 +58,14 @@
         <div class="build-meta" id="build-meta" aria-label="Version and release source">
           <span id="build-version">v...</span>
           <strong id="build-source">Release source...</strong>
+          <button
+            class="build-donate-button ui-button"
+            id="build-donate"
+            type="button"
+            data-url="https://buymeacoffee.com/incredidev/membership"
+          >
+            Donate
+          </button>
         </div>
       </aside>
 
@@ -1192,6 +1200,44 @@ Select a queue item.</pre
             <h2>You're all set.</h2>
             <p>You can change your API key later in the Profile section.</p>
           </div>
+        </div>
+      </div>
+    </div>
+    <div class="donate-gate ui-modal-gate" id="donate-gate" aria-hidden="true">
+      <div
+        class="donate-modal ui-panel ui-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="donate-title"
+      >
+        <span class="donate-kicker">Support the project</span>
+        <h2 id="donate-title">Support Incred and ISpooferMotion</h2>
+        <p class="donate-lead">
+          If you would like to support Incred and ISpooferMotion, you can donate.
+        </p>
+        <div class="donate-benefits ui-card">
+          <strong>Includes Discord benefits</strong>
+          <div class="donate-copy">
+            <p>You will directly support me and my projects.</p>
+            <p>
+              You will get early access to upcoming updates to my projects! Expect to receive
+              updates a week or more before the public and have direct access to contact me and
+              help in the development of my projects.
+            </p>
+          </div>
+          <ul>
+            <li>Support me on a monthly basis</li>
+            <li>Early access to spoofer updates</li>
+          </ul>
+        </div>
+        <div class="donate-actions ui-action-row">
+          <button class="ui-button" type="button" id="donate-close">Maybe later</button>
+          <button class="ui-button donate-never-button" type="button" id="donate-never">
+            Don’t show again
+          </button>
+          <button class="primary-action ui-button-primary" type="button" id="donate-open">
+            Donate
+          </button>
         </div>
       </div>
     </div>

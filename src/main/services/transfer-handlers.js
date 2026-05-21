@@ -175,7 +175,7 @@ async function downloadAnimationAssetWithProgress(
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
       const result = await downloadFile(url, filePath, {
-        headers: { Cookie: cookieHeader },
+        headers: getSpoofedHeaders(cookieHeader),
         requestTimeoutMs: timeoutMs,
         bodyStallTimeoutMs: bodyReadTimeoutMs,
         overallTimeoutMs,
@@ -310,6 +310,22 @@ async function publishAnimationRbxmWithProgress(
     : userId
       ? { userId: String(userId) }
       : null;
+  if (!creatorObj) {
+    const errorMsg = 'User uploads need a resolved Roblox user ID before calling Open Cloud.';
+    sendTransferUpdate({
+      id: transferId,
+      status: 'error',
+      error: errorMsg,
+      errorCategory: 'upload_permission',
+      progress: 0,
+    });
+    return {
+      success: false,
+      error: errorMsg,
+      errorCategory: 'upload_permission',
+      retryable: false,
+    };
+  }
 
   const assetType = isAudio ? 'Audio' : 'Animation';
   const fileType = isAudio ? 'audio/ogg' : 'model/x-rbxm';
@@ -320,8 +336,8 @@ async function publishAnimationRbxmWithProgress(
     assetType,
     displayName: name,
     description: 'Placeholder',
+    creationContext: { creator: creatorObj },
   };
-  if (creatorObj) requestMetadata.creationContext = { creator: creatorObj };
 
   if (DEVELOPER_MODE) {
     console.log(`[UPLOAD DEBUG] Attempting ${assetType} upload for "${name}" via Open Cloud API`);

@@ -45,9 +45,7 @@ try {
 const releaseBuild =
   process.argv.includes('--release') || process.env.ISPOOFER_LAUNCHER_RELEASE_BUILD === '1';
 const args = ['--win', 'nsis', '--publish', 'never'];
-if (!releaseBuild) {
-  args.push('-c.win.signAndEditExecutable=false');
-}
+args.push('-c.win.signAndEditExecutable=false');
 const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const result = cli
   ? spawnSync(process.execPath, [cli, ...args], {

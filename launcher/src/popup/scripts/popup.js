@@ -60,13 +60,13 @@ function renderButtons(buttons) {
     (button) => (button.id || 'ok') !== 'dismiss',
   );
   const byId = new Map(source.map((button) => [button.id || 'ok', button]));
-  const tryFork = byId.get('try-fork');
-  const rightOrder = ['ok', 'retry', 'copy'];
+  const leftAction = byId.get('try-fork') || byId.get('use-fork');
+  const rightOrder = ['continue-official', 'ok', 'retry', 'copy'];
   const rightButtons = rightOrder.map((id) => byId.get(id)).filter(Boolean);
-  const shown = new Set(['try-fork', ...rightOrder]);
+  const shown = new Set(['try-fork', 'use-fork', ...rightOrder]);
   const extras = source.filter((button) => !shown.has(button.id || 'ok'));
 
-  if (tryFork) actions.appendChild(makeButton(tryFork));
+  if (leftAction) actions.appendChild(makeButton(leftAction));
   const spacer = document.createElement('span');
   spacer.className = 'action-spacer';
   actions.appendChild(spacer);

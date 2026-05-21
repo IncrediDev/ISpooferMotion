@@ -191,6 +191,52 @@ function getVersionFromNameOrTag(value) {
   return updater.getVersionFromNameOrTag(value);
 }
 
+function getReleaseVersion(release) {
+  return getVersionFromNameOrTag((release && (release.tag_name || release.name)) || '');
+}
+
+async function chooseForkReleaseIfNewer(officialRelease, options = {}) {
+  if ((options.sourceId || DEFAULT_RELEASE_SOURCE_ID) !== 'official') return null;
+  if (options.skipForkPrompt || options.forceRepair) return null;
+
+  const officialVersion = getReleaseVersion(officialRelease);
+  if (!officialVersion) return null;
+
+  const forkSource = getReleaseSource('fork');
+  let forkRelease;
+  try {
+    forkRelease = await requestLatestRelease(forkSource, {
+      forceRefresh: Boolean(options.forceRefresh),
+    });
+  } catch (err) {
+    writeLog(`Fork update check failed: ${err && err.message ? err.message : err}`);
+    return null;
+  }
+
+  const forkVersion = getReleaseVersion(forkRelease);
+  if (!forkVersion || updater.compareVersions(forkVersion, officialVersion) <= 0) return null;
+
+  const forkAsset = updater.chooseWindowsAppAsset(forkRelease.assets);
+  if (!forkAsset) {
+    writeLog(`Fork ${forkVersion} is newer but has no managed app asset.`);
+    return null;
+  }
+
+  const response = await showLauncherPopup({
+    type: 'warn',
+    title: 'ISpooferLauncher',
+    message: 'Fork update available.',
+    detail: `The fork has ${forkVersion}, while official is ${officialVersion}.\n\nContinue with official for the stable release, or use fork to install the newer test build.`,
+    buttons: [
+      { id: 'use-fork', label: 'Use Fork', kind: 'primary' },
+      { id: 'continue-official', label: 'Continue Official', kind: 'secondary' },
+    ],
+  });
+
+  if (response !== 'use-fork') return null;
+  return { source: forkSource, release: forkRelease };
+}
+
 function getAssetSize(asset) {
   return Number(asset && asset.size) > 0 ? Number(asset.size) : 0;
 }
@@ -963,15 +1009,26 @@ async function runUpdateFlow(options = {}) {
   if (running) return { running: true };
   running = true;
   ensureDirs();
+  let launchedEarly = false;
   try {
     cleanupLegacyFolders().catch(() => {});
-    const source = getReleaseSource(options.sourceId || DEFAULT_RELEASE_SOURCE_ID);
+    let source = getReleaseSource(options.sourceId || DEFAULT_RELEASE_SOURCE_ID);
+    const state = getInstallState();
+    if (
+      options.fastLaunch !== false &&
+      !options.forceRepair &&
+      !options.forceRefresh &&
+      isAllowedAppPath(state.exePath)
+    ) {
+      await launchExe(state.exePath);
+      launchedEarly = true;
+      sendStatus({ level: 'success', message: 'Started installed app. Checking updates...' });
+    }
     sendStatus({
       level: 'info',
       message: 'Checking for updates...',
       detail: updater.getSourceDisplayName(source),
     });
-    const state = getInstallState();
     let release;
     try {
       release = await requestLatestRelease(source, {
@@ -979,6 +1036,7 @@ async function runUpdateFlow(options = {}) {
       });
     } catch (err) {
       sendStatus({ level: 'warn', message: `Update check failed: ${err.message}` });
+      if (launchedEarly) return { ok: true, offline: true, launchedEarly: true };
       if (isAllowedAppPath(state.exePath)) {
         await launchExe(state.exePath);
         sendStatus({ level: 'success', message: 'Started previously installed app.' });
@@ -986,6 +1044,20 @@ async function runUpdateFlow(options = {}) {
         return { ok: true, offline: true };
       }
       throw err;
+    }
+
+    const forkChoice = await chooseForkReleaseIfNewer(release, {
+      ...options,
+      sourceId: source.id,
+    });
+    if (forkChoice) {
+      source = forkChoice.source;
+      release = forkChoice.release;
+      sendStatus({
+        level: 'info',
+        message: 'Using fork release.',
+        detail: `${source.label} ${release.tag_name || release.name || 'latest'}`,
+      });
     }
 
     const latestTag = release.tag_name || release.name || 'latest';
@@ -1076,10 +1148,12 @@ async function runUpdateFlow(options = {}) {
     }
 
     cleanupDownloadArtifacts().catch(() => {});
-    await launchExe(exePath);
+    if (!launchedEarly) {
+      await launchExe(exePath);
+    }
     sendStatus({ level: 'success', message: 'Done.' });
     if (!IS_DEV) setTimeout(() => app.quit(), 120);
-    return { ok: true };
+    return { ok: true, launchedEarly };
   } finally {
     running = false;
   }

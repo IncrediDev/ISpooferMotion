@@ -35,6 +35,7 @@ checkJson('package.json');
 checkJson('launcher/package.json');
 checkFile('scripts/build-plugin-rbxmx.js');
 checkFile('launcher/scripts/build-win.js');
+checkFile('launcher/scripts/after-pack.js');
 
 checkFile('build/entitlements.mac.plist');
 checkFile('src/assets/app_icon.ico');
@@ -55,6 +56,7 @@ run('node', ['--check', 'launcher/src/main/main.js']);
 run('node', ['--check', 'launcher/src/preload/preload.js']);
 run('node', ['--check', 'launcher/src/popup/scripts/popup.js']);
 run('node', ['--check', 'launcher/scripts/build-win.js']);
+run('node', ['--check', 'launcher/scripts/after-pack.js']);
 run('node', ['--check', 'scripts/build-plugin-rbxmx.js']);
 run('node', ['scripts/release-hardening-check.js', '--allow-generated-output']);
 run('node', ['scripts/build-plugin-rbxmx.js']);
