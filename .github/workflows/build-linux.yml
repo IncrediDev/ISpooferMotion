@@ -1,41 +1,55 @@
-name: Build for Linux
+name: Build Linux App
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-linux-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-linux:
+    name: Linux packages
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev python3 build-essential
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsecret-1-dev python3 build-essential
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Rebuild native modules for Electron
-        run: npx electron-rebuild
+      - name: Run tests
+        run: npm test
 
-      - name: Build for Linux
+      - name: Run release hardening check
+        run: npm run release:hardening-check
+
+      - name: Build Linux packages
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npm run build -- --linux --publish never
 
-      - name: Upload AppImage
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
-          path: dist/*.AppImage
-
-      - name: Upload deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-deb
-          path: dist/*.deb
+          name: ISpooferMotion-Linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error

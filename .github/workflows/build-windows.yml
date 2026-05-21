@@ -1,34 +1,52 @@
-name: Build Windows App EXE
+name: Build Windows App
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-windows-app-exe:
+  build-windows-app:
+    name: Windows portable app
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Rebuild native modules for Electron
-        run: npx electron-rebuild
+      - name: Run tests
+        run: npm test
 
-      - name: Build Windows app EXE
+      - name: Run release sanity check
+        run: npm run release:local-check
+
+      - name: Run release hardening check
+        run: npm run release:hardening-check
+
+      - name: Build Windows portable app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_DISABLE_WIN_CODE_SIGN: true
         run: npm run build -- --win portable --publish never
 
-      - name: Upload launcher-managed app EXE
+      - name: Upload Windows app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-app-exe
+          name: ISpooferMotion-Windows-App
           path: dist/*App*.exe
+          if-no-files-found: error

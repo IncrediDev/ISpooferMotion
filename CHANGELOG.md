@@ -1,10 +1,19 @@
 # Changelog
 
+## v1.3.0
+
+I'm too lazy to write a changelog, just know everything is better than it was before.
+
+This is also the final big update before V1 goes into maintenance mode, so from here on out it’ll only be getting bug fixes, stability improvements, and small patches unless something major needs attention.
+
+- Bye Incred UI, Hello Cody UI.
+
 ## v1.2.16
 
 This update is mostly just polish. I spent like 12 hours doing all of this so enjoy.
 
 ### Launcher and installs
+
 - Added a proper Electron launcher instead of the old console-style launcher.
 - The launcher is now the main place to install, update, launch, and uninstall ISpooferMotion.
 - Added automatic release checking from GitHub.
@@ -15,6 +24,7 @@ This update is mostly just polish. I spent like 12 hours doing all of this so en
 - Moved all launcher-created data folders to `ISpooferMotion` instead of lowercase/random names.
 
 ### Main app
+
 - Added Profiles so common setups can be saved and reused.
 - Profiles save account/settings stuff like cookie, Open Cloud API key, group ID, folders, retry settings, and concurrency settings.
 - Profiles do not save animation/sound input lists or output results.
@@ -29,6 +39,7 @@ This update is mostly just polish. I spent like 12 hours doing all of this so en
 - Added custom scrollbars.
 
 ### Batch processing
+
 - Fixed the raw Roblox cookie header in batch requests.
 - Removed the old required CSRF fetch since the current upload flow does not need it.
 - Added download concurrency limits.
@@ -41,15 +52,18 @@ This update is mostly just polish. I spent like 12 hours doing all of this so en
 - Changed source asset 403 errors so they show as asset access problems instead of blaming group permissions.
 
 ### Roblox Studio plugin
+
 - Added support for the remade Get IDs UI.
 - Added support for the remade Replace IDs UI.
 - Added a build script so the workflow can turn the plugin source into a `.rbxmx` release asset.
 
 ### Releases
+
 - Added a tag-based release workflow.
 - Release builds now upload the launcher setup EXE, the managed app EXE, and the Roblox Studio plugin `.rbxmx`.
 - Release notes now come from this changelog instead of needing to type them manually every time.
 
 ### Cleanup and safety
+
 - Tightened external link opening so only expected trusted links can be opened.
 - Tightened packaging so random build folders, downloads, launcher files, and repo metadata do not get bundled into the app.

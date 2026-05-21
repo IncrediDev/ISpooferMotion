@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self' data:;"
+    />
+    <title>ISpooferLauncher</title>
+    <link rel="stylesheet" href="./styles/popup.css" />
+  </head>
+  <body>
+    <main id="card" class="popup-card ui-panel">
+      <div class="top-line">
+        <div class="brand">
+          <span class="logo-wrap"><img src="../assets/app_icon.png" alt="" /></span>
+          <span class="brand-copy">
+            <strong>ISpooferMotion</strong>
+            <small id="state-label">Launcher popup</small>
+          </span>
+        </div>
+        <button
+          id="close-popup"
+          class="close-button ui-icon-button"
+          type="button"
+          aria-label="Close"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <section class="content ui-card">
+        <div id="spinner-wrap" class="spinner-wrap" hidden>
+          <div class="spinner ui-spinner"></div>
+        </div>
+        <h1 id="title">ISpooferLauncher</h1>
+        <p id="message">ISpooferMotion</p>
+        <pre id="detail"></pre>
+        <div id="progress-wrap" class="progress-wrap ui-progress" hidden>
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <p id="progress-label" class="progress-label" hidden></p>
+      </section>
+
+      <footer id="actions" class="actions ui-action-row"></footer>
+    </main>
+    <script src="./scripts/popup.js"></script>
+  </body>
+</html>
