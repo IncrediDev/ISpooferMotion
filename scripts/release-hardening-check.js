@@ -213,11 +213,14 @@ function checkBuildConfig() {
   if (
     !launcherPkg.build ||
     !launcherPkg.build.win ||
-    launcherPkg.build.win.signAndEditExecutable !== true
+    (launcherPkg.build.win.signAndEditExecutable !== true &&
+      launcherPkg.build.afterPack !== 'scripts/after-pack.js')
   ) {
     warn(
-      'Launcher Windows build is not configured with signAndEditExecutable: true; icons/metadata may not embed as expected.',
+      'Launcher Windows build is not configured with signAndEditExecutable: true or the afterPack icon stamper; icons/metadata may not embed as expected.',
     );
+  } else if (launcherPkg.build.afterPack === 'scripts/after-pack.js') {
+    ok('launcher build stamps Windows icon after pack');
   }
 }
 
@@ -322,6 +325,9 @@ function checkWorkflows() {
     fail('Release workflow is missing VirusTotal upload support.');
   else ok('release workflow has VirusTotal support');
   const releaseWorkflow = read('.github/workflows/release.yml');
+  if (!/Ensure release tag is this commit/.test(releaseWorkflow) || !/refs\/tags\/\$env:RELEASE_TAG/.test(releaseWorkflow))
+    fail('Release workflow should verify or create the release tag for the exact workflow commit.');
+  else ok('release workflow pins tag to workflow commit');
   if (!/virustotal-links\.md/.test(releaseWorkflow) || !/release-notes\.md/.test(releaseWorkflow))
     fail('Release workflow should add VirusTotal links to release notes.');
   else ok('release workflow adds VirusTotal links to release notes');

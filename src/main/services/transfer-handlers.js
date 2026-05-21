@@ -175,7 +175,7 @@ async function downloadAnimationAssetWithProgress(
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
       const result = await downloadFile(url, filePath, {
-        headers: { Cookie: cookieHeader },
+        headers: getSpoofedHeaders(cookieHeader),
         requestTimeoutMs: timeoutMs,
         bodyStallTimeoutMs: bodyReadTimeoutMs,
         overallTimeoutMs,

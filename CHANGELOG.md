@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.10
+
+- Fixed ISpooferLauncher showing the default Electron icon.
+- Made ISpooferLauncher open an already installed ISpooferMotion much faster while it checks for updates in the background.
+- Added a prompt when the testing fork has a newer update, with options to keep using the official release or switch to the fork build.
+- Moved saved profile cookies and Open Cloud API keys into secure system credential storage.
+- Kept app notifications under control by showing no more than four at once.
+- Improved asset download fallback behavior for assets that Roblox does not return cleanly from the normal batch lookup.
+- Made blocked/private source asset failures clearer so it is easier to tell when the current account or place does not have access.
+- Made copied debug info safer by hiding sensitive account data and local user paths.
+
 ## v1.3.0
 
 I'm too lazy to write a changelog, just know everything is better than it was before.

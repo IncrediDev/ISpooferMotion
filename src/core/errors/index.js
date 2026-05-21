@@ -155,6 +155,10 @@ function classifyError(error, context = {}) {
     category = structuredCategory;
     message = error.message || text || categoryLabel(category);
     suggestedFix = error.suggestedFix || suggestedFixForCategory(category, stage);
+  } else if (lower.includes('advanced resolution methods exhausted')) {
+    category = ERROR_CATEGORIES.PRIVATE_ASSET;
+    message = 'Roblox blocked access to this source asset.';
+    suggestedFix = 'Use an account/place with access to the asset.';
   } else if (error && error.code === 'SPOOFER_CANCELLED') {
     category = ERROR_CATEGORIES.CANCELED;
     message = 'The run was canceled.';

@@ -1,6 +1,6 @@
 {
   "name": "ispoofermotion-launcher",
-  "version": "1.3.0",
+  "version": "1.3.10",
   "description": "Electron launcher/updater for ISpooferMotion official releases.",
   "main": "src/main/main.js",
   "license": "GPL-3.0-or-later",
@@ -35,10 +35,11 @@
     "directories": {
       "output": "dist"
     },
+    "afterPack": "scripts/after-pack.js",
     "win": {
       "target": "nsis",
       "icon": "src/assets/app_icon.ico",
-      "signAndEditExecutable": true,
+      "signAndEditExecutable": false,
       "legalTrademarks": "ISpooferMotion"
     },
     "nsis": {

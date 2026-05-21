@@ -60,6 +60,8 @@ async function buildAppDebugInfo(context = {}, deps = {}) {
   const { app, fs } = deps;
   const source = await getReleaseSourceLabel({ app, fs });
   const assetCount = Number(context.assetCount || 0);
+  const sanitizeOptions = { homePath: app.getPath('home') };
+  const sanitizedReport = sanitizeSupportValue(context.report || {}, sanitizeOptions);
 
   return [
     'ISpooferMotion App Debug Info',
@@ -69,7 +71,7 @@ async function buildAppDebugInfo(context = {}, deps = {}) {
     `Mode: ${context.mode || 'unknown'}`,
     `Asset count: ${Number.isFinite(assetCount) ? assetCount : 0}`,
     `Failure categories: ${summarizeFailureCategories(context.report)}`,
-    `User data: ${app.getPath('userData')}`,
+    `User data: ${redactLocalPath(app.getPath('userData'), sanitizeOptions)}`,
     `Platform: ${process.platform} ${process.arch}`,
     '',
     'Last status:',
@@ -77,8 +79,8 @@ async function buildAppDebugInfo(context = {}, deps = {}) {
     '',
     'Run report:',
     typeof context.report === 'string'
-      ? context.report.slice(0, 8000)
-      : JSON.stringify(context.report || {}, null, 2).slice(0, 8000),
+      ? sanitizeSupportValue(context.report, sanitizeOptions).slice(0, 8000)
+      : JSON.stringify(sanitizedReport, null, 2).slice(0, 8000),
   ].join('\n');
 }
 
