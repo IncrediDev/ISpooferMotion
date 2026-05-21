@@ -15,6 +15,8 @@
   const accentPicker = document.getElementById('accent-picker');
   const spooferInput = document.getElementById('spoofer-input');
   const spooferInputLabel = document.getElementById('spoofer-input-label');
+  const spooferWorkflow = document.querySelector('.spoofer-workflow');
+  const spooferAdvanced = document.querySelector('.spoofer-advanced');
   const spooferDownloadOnly = document.getElementById('spoofer-download-only');
   const spooferEnableSpoofing = document.getElementById('spoofer-enable-spoofing');
   const spooferCookieInput = document.getElementById('spoofer-cookie-input');
@@ -133,6 +135,10 @@
   const apiKeyError = document.getElementById('api-key-error');
   const apiKeyDone = document.getElementById('api-key-done');
   const apiKeyGet = document.getElementById('api-key-get');
+  const donateGate = document.getElementById('donate-gate');
+  const donateOpen = document.getElementById('donate-open');
+  const donateClose = document.getElementById('donate-close');
+  const donateNever = document.getElementById('donate-never');
   const activityTabs = document.querySelector('.activity-tabs');
   const activityReportPanel = document.querySelector('[data-activity-panel="report"]');
   let activeTooltipAnchor = null;
@@ -164,6 +170,7 @@
   }
 
   const settingsKey = 'ispoofermotion:settings';
+  const donatePromptKey = 'ispoofermotion:donatePromptDismissed:v2';
   const notificationTextCache = new Map();
   const profileSecretCache = new Map();
   const defaultAccent = '#4caf50';
@@ -407,6 +414,15 @@
     console.warn(`Could not load secure profile credentials: ${err.message || err}`);
   }
 
+  let runtimeInfo = { developerMode: false };
+  try {
+    runtimeInfo = (await api.getRuntimeInfo?.()) || runtimeInfo;
+  } catch {
+    runtimeInfo = { developerMode: false };
+  }
+  const isDeveloperMode = runtimeInfo.developerMode === true;
+  const shouldSuppressDonateGate = () => localStorage.getItem(donatePromptKey) === 'true';
+
   const cleanNumberInput = (input) => {
     if (!input) return;
     const cleanValue = String(input.value || '').replace(/\D/g, '');
@@ -527,8 +543,51 @@
   };
 
   const openUrl = (url) => {
-    if (!url || typeof api.openExternal !== 'function') return;
-    api.openExternal(url);
+    const safeUrl = String(url || '').trim();
+    if (!safeUrl) return;
+
+    const fallbackOpen = () => {
+      try {
+        window.open(safeUrl, '_blank', 'noopener,noreferrer');
+      } catch (err) {
+        console.warn(`Could not open ${safeUrl}: ${err.message || err}`);
+      }
+    };
+
+    try {
+      const result = api.openExternal?.(safeUrl);
+      if (result && typeof result.then === 'function') {
+        result.then((response) => {
+          if (response === false || response?.ok === false) fallbackOpen();
+        }).catch(fallbackOpen);
+        return;
+      }
+      if (result === false || result?.ok === false || typeof api.openExternal !== 'function') {
+        fallbackOpen();
+      }
+    } catch {
+      fallbackOpen();
+    }
+  };
+
+  const showDonateGate = () => {
+    if (!donateGate || shouldSuppressDonateGate()) return;
+    donateGate.setAttribute('aria-hidden', 'false');
+    donateGate.classList.add('show');
+    document.body.classList.add('donate-locked');
+    setTimeout(() => donateOpen?.focus(), 120);
+  };
+
+  const hideDonateGate = (remember = false) => {
+    donateGate?.classList.remove('show');
+    donateGate?.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('donate-locked');
+    if (remember) localStorage.setItem(donatePromptKey, 'true');
+  };
+
+  const maybeShowDonateGate = (delay = 350) => {
+    if (!donateGate || shouldSuppressDonateGate()) return;
+    setTimeout(showDonateGate, delay);
   };
 
   const setButtonBusy = (button, busy, label = 'Working') => {
@@ -1547,6 +1606,16 @@
     writeActiveProfilePatch({ runReports: [] });
     renderRunReport();
   };
+  const autoSizeSpooferInput = () => {
+    if (!spooferInput) return;
+    spooferInput.style.height = 'auto';
+    const styles = getComputedStyle(spooferInput);
+    const minHeight = parseFloat(styles.minHeight) || 118;
+    const maxHeight = parseFloat(styles.maxHeight) || 238;
+    const nextHeight = Math.min(maxHeight, Math.max(minHeight, spooferInput.scrollHeight));
+    spooferInput.style.height = `${nextHeight}px`;
+  };
+
   const parseSpooferInput = () => {
     const text = String(spooferInput?.value || '');
     const lines = text.replace(/\r\n/g, '\n').split('\n');
@@ -1641,6 +1710,7 @@
     renderSpooferButtons();
   };
   const renderSpooferPreflight = () => {
+    autoSizeSpooferInput();
     const active = getActiveProfile();
     const parsed = parseSpooferInput();
     if (spooferInputLabel) spooferInputLabel.textContent = 'Asset IDs';
@@ -1833,6 +1903,11 @@
     document.documentElement.style.setProperty('--accent', `rgb(${r}, ${g}, ${b})`);
     document.documentElement.style.setProperty('--accent-soft', `rgba(${r}, ${g}, ${b}, 0.10)`);
     document.documentElement.style.setProperty('--accent-line', `rgba(${r}, ${g}, ${b}, 0.26)`);
+    document.documentElement.style.setProperty('--accent-glow', `rgba(${r}, ${g}, ${b}, 0.18)`);
+    document.documentElement.style.setProperty(
+      '--accent-workflow-bg',
+      `rgba(${r}, ${g}, ${b}, 0.035)`,
+    );
     document.documentElement.style.setProperty(
       '--state-selected-bg',
       `rgba(${r}, ${g}, ${b}, 0.08)`,
@@ -1914,12 +1989,8 @@
     }
     identityPreview.classList.toggle('has-group', hasGroup && hasUser);
   };
-  const triggerIdentityPop = (kind) => {
-    const row = document.querySelector(`[data-identity-row="${CSS.escape(kind)}"]`);
-    if (!row) return;
-    row.classList.remove('pop');
-    void row.offsetWidth;
-    row.classList.add('pop');
+  const triggerIdentityPop = () => {
+    // Identity rows update silently; no profile-card pop animation.
   };
 
   const looksLikeApiKey = (value) => {
@@ -1959,12 +2030,25 @@
     apiKeyEntryStep?.setAttribute('aria-hidden', 'true');
     apiKeySuccessStep?.removeAttribute('aria-hidden');
     requestAnimationFrame(() => apiKeySuccessStep?.classList.add('active'));
-    setTimeout(hideApiKeyGate, 1900);
+    setTimeout(() => {
+      hideApiKeyGate();
+      maybeShowDonateGate(350);
+    }, 1900);
   };
 
   apiKeyGet?.addEventListener('click', () =>
     openUrl('https://create.roblox.com/dashboard/credentials'),
   );
+  donateOpen?.addEventListener('click', () => {
+    openUrl('https://buymeacoffee.com/incredidev/membership');
+    hideDonateGate(false);
+  });
+  donateClose?.addEventListener('click', () => hideDonateGate(false));
+  donateNever?.addEventListener('click', () => hideDonateGate(true));
+  donateGate?.addEventListener('click', (event) => {
+    if (event.target === donateGate) hideDonateGate(false);
+  });
+
   apiKeyDone?.addEventListener('click', completeApiKeySetup);
   apiKeyInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') completeApiKeySetup();
@@ -1973,7 +2057,11 @@
     if (apiKeyError) apiKeyError.textContent = '';
   });
 
-  if (!savedSettings.apiKeySetupDone && !getActiveProfile().apiKey) showApiKeyGate();
+  if (!savedSettings.apiKeySetupDone && !getActiveProfile().apiKey) {
+    showApiKeyGate();
+  } else {
+    maybeShowDonateGate(650);
+  }
 
   minimizeBtn?.addEventListener('click', () => api.minimize?.());
   closeBtn?.addEventListener('click', () => api.close?.());
@@ -2114,8 +2202,6 @@
       },
       {
         busyLabel: 'Refreshing',
-        doneLabel: 'Refreshed',
-        successMessage: 'Roblox profile refreshed',
       },
     );
   });
@@ -2251,7 +2337,25 @@
     saveSetting(input.dataset.setting, input.checked);
   });
 
-  spooferInput?.addEventListener('input', renderSpooferPreflight);
+  spooferAdvanced?.addEventListener('toggle', () => {
+    if (!spooferAdvanced.open) return;
+    const scrollToBottom = () => {
+      [spooferWorkflow, document.querySelector('.spoofer-page'), document.querySelector('.workspace')]
+        .filter(Boolean)
+        .forEach((panel) => {
+          if (panel.scrollHeight > panel.clientHeight) {
+            panel.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' });
+          }
+        });
+    };
+    requestAnimationFrame(scrollToBottom);
+    setTimeout(scrollToBottom, 180);
+  });
+
+  spooferInput?.addEventListener('input', () => {
+    autoSizeSpooferInput();
+    renderSpooferPreflight();
+  });
   spooferCookieInput?.addEventListener('input', () => {
     if (spooferCookieInput.disabled) return;
     writeActiveProfileSecretPatch({ robloxCookie: spooferCookieInput.value.trim() });
@@ -2596,6 +2700,8 @@
     }
   };
   applyAccent(savedSettings.accentColour || defaultAccent);
+  requestAnimationFrame(autoSizeSpooferInput);
+  window.addEventListener('resize', autoSizeSpooferInput);
   renderProfiles();
   refreshBuildMeta();
 

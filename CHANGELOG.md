@@ -10,6 +10,11 @@
 - Improved asset download fallback behavior for assets that Roblox does not return cleanly from the normal batch lookup.
 - Made blocked/private source asset failures clearer so it is easier to tell when the current account or place does not have access.
 - Made copied debug info safer by hiding sensitive account data and local user paths.
+- Reverted to an older UI that was honestly better (Colours and certain button locations)
+- Fixed animation ID processing that could incorrectly fail with Roblox private-asset errors even when the account/place had access.
+- Improved fallback checks for source assets by retrying Roblox's place-aware asset lookup before falling back to direct downloads.
+- Restored user-account uploads to always use the resolved Roblox user as the upload creator.
+- Made upload preflight stop early with a clear error when the app cannot resolve the Roblox user ID.
 
 ## v1.3.0
 

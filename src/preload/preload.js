@@ -12,7 +12,8 @@ const on = (channel, listener) => {
 contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => send('window-minimize'),
   close: () => send('window-close'),
-  openExternal: (url) => send('open-external', url),
+  openExternal: (url) => invoke('open-external', url),
+  getRuntimeInfo: () => invoke('get-runtime-info'),
   getAppVersion: () => invoke('get-app-version'),
   getReleaseSource: () => invoke('get-release-source'),
   loadProfileSecrets: (profileIds) => invoke('load-profile-secrets', profileIds || []),

@@ -23,6 +23,7 @@ const {
   publishAnimationRbxmWithProgress,
 } = require('./transfer-handlers');
 const { runQueue } = require('../../core/queue');
+const { readTextWithTimeout } = require('../../core/downloads');
 const { animationGrabberTask } = require('../../features/animation-grabber/task');
 const { soundGrabberTask } = require('../../features/sound-grabber/task');
 const {
@@ -894,6 +895,10 @@ function registerIpcHandlers(
     }
   });
 
+  ipcMain.handle('get-runtime-info', () => ({
+    developerMode: DEVELOPER_MODE,
+  }));
+
   ipcMain.handle('get-roblox-profile', async (_event, data) => {
     try {
       return await getRobloxProfileForRenderer(data || {});
@@ -978,7 +983,7 @@ function registerIpcHandlers(
     }
   });
 
-  ipcMain.on('open-external', (event, url) => {
+  ipcMain.handle('open-external', async (_event, url) => {
     const { shell } = require('electron');
 
     const isAllowedExternalHost = (hostname) => {
@@ -992,6 +997,9 @@ function registerIpcHandlers(
         host.endsWith('.discord.com') ||
         host === 'incredidev.com' ||
         host.endsWith('.incredidev.com') ||
+        host === 'buymeacoffee.com' ||
+        host === 'www.buymeacoffee.com' ||
+        host.endsWith('.buymeacoffee.com') ||
         host === 'roblox.com' ||
         host.endsWith('.roblox.com')
       );
@@ -1002,12 +1010,14 @@ function registerIpcHandlers(
 
       if (parsedUrl.protocol !== 'https:' || !isAllowedExternalHost(parsedUrl.hostname)) {
         if (DEVELOPER_MODE) console.warn('Blocked external URL:', url);
-        return;
+        return { ok: false };
       }
 
-      shell.openExternal(parsedUrl.href);
+      await shell.openExternal(parsedUrl.href);
+      return { ok: true };
     } catch (err) {
       if (DEVELOPER_MODE) console.warn('Failed to open external URL:', err);
+      return { ok: false };
     }
   });
 
@@ -1999,6 +2009,51 @@ ${rejectedText}`
     const assetId = String(item.requestId);
     let foundLocation = null;
     let fallbackErrors = [];
+    const creatorKey = normalizeCreatorKey(item.creatorType, item.creatorId);
+    const placeIdArray = normalizePlaceIdCandidates(placeIdMap[creatorKey]);
+    const itemWithoutCreator = (({ creatorType, creatorId, ...rest }) => rest)(item);
+
+    const trySingleBatch = async (placeId) => {
+      try {
+        const resp = await fetchWithTimeout(
+          'https://assetdelivery.roblox.com/v2/assets/batch',
+          {
+            method: 'POST',
+            headers: {
+              ...getDynamicStudioHeaders(),
+              'Roblox-Place-Id': String(placeId),
+            },
+            body: JSON.stringify([itemWithoutCreator]),
+          },
+          Math.max(5000, BATCH_TIMEOUT_MS),
+          `Single asset batch fallback ${placeId}`,
+        );
+        if (!resp.ok) {
+          fallbackErrors.push(`[Single batch ${placeId}] HTTP ${resp.status}`);
+          return null;
+        }
+        const body = await readJsonWithTimeout(
+          resp,
+          8000,
+          `Single asset batch fallback response ${placeId}`,
+        );
+        const loc = Array.isArray(body) ? body[0] : body;
+        if (isUsableLocation(loc)) {
+          return {
+            ...loc,
+            requestId: loc && loc.requestId !== undefined ? loc.requestId : assetId,
+          };
+        }
+        fallbackErrors.push(
+          `[Single batch ${placeId}] ${extractBatchLocationError(loc) || 'no location'}`,
+        );
+      } catch (err) {
+        let msg = err && err.message ? err.message : String(err);
+        if (msg.includes('aborted') || msg.includes('timeout')) msg = 'Blocked/Dropped';
+        fallbackErrors.push(`[Single batch ${placeId}] ${msg}`);
+      }
+      return null;
+    };
 
     const tryUrl = async (url, label) => {
       try {
@@ -2017,6 +2072,9 @@ ${rejectedText}`
         } else if (resp.ok) {
           // If it didn't redirect but gave 200, the URL might be a direct CDN link already
           if (resp.url.includes('rbxcdn.com') || resp.url.includes('roblox.com')) return resp.url;
+          fallbackErrors.push(`[${label}] HTTP ${resp.status} without downloadable location`);
+        } else {
+          fallbackErrors.push(`[${label}] HTTP ${resp.status}`);
         }
       } catch (err) {
         let msg = err.message;
@@ -2028,6 +2086,13 @@ ${rejectedText}`
 
     // Advanced Resolution 1: Direct endpoint fallback (resolves latest public version)
     if (DEVELOPER_MODE) console.log(`(Dev) Trying advanced resolution for ${assetId}...`);
+    for (const placeId of placeIdArray.slice(0, 8)) {
+      await checkPaused();
+      checkCancelled();
+      const batchLoc = await trySingleBatch(placeId);
+      if (batchLoc) return batchLoc;
+    }
+
     // Reduced timeout for v1/asset to prevent long WAF stalls
     foundLocation = await tryUrl(`https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`, 'Direct');
 
@@ -2104,8 +2169,21 @@ ${rejectedText}`
           console.log(
             `(Dev) Batch request for ${creatorKey}: ${unresolved.length} item(s) with placeId ${placeId}`,
           );
-        const locations = await fetchBatchRequest(unresolved, placeId, creatorKey);
-        const locationById = new Map((locations || []).map((loc) => [String(loc.requestId), loc]));
+        const batchResponse = await fetchBatchRequest(unresolved, placeId, creatorKey);
+        const locations = Array.isArray(batchResponse) ? batchResponse : [];
+        const locationById = new Map();
+        locations.forEach((loc, index) => {
+          const explicitId = loc && loc.requestId !== undefined ? String(loc.requestId) : '';
+          if (explicitId) locationById.set(explicitId, loc);
+          const fallbackItem = unresolved[index];
+          if (fallbackItem && !locationById.has(String(fallbackItem.requestId))) {
+            locationById.set(String(fallbackItem.requestId), {
+              ...loc,
+              requestId:
+                loc && loc.requestId !== undefined ? loc.requestId : String(fallbackItem.requestId),
+            });
+          }
+        });
         const stillUnresolved = [];
 
         for (const item of unresolved) {
@@ -2138,17 +2216,20 @@ ${rejectedText}`
           classified.category !== 'bad_cookie' &&
           classified.category !== 'canceled'
         ) {
+          for (const item of unresolved) {
+            lastErrorsById.set(String(item.requestId), classified.raw || classified.message);
+          }
           sendStatusMessage(
             `Batch lookup failed for place ${placeId}; trying another place candidate...`,
           );
           continue;
         }
-        if (items.length > 1) {
-          const nextSize = Math.max(1, Math.ceil(items.length / 2));
+        if (unresolved.length > 1) {
+          const nextSize = Math.max(1, Math.ceil(unresolved.length / 2));
           sendStatusMessage(
-            `Batch lookup failed; splitting ${items.length} item(s) into smaller groups...`,
+            `Batch lookup failed; splitting ${unresolved.length} item(s) into smaller groups...`,
           );
-          for (const split of chunkArray(items, nextSize)) {
+          for (const split of chunkArray(unresolved, nextSize)) {
             await resolveBatchChunkWithSplit(split, creatorKey, depth + 1);
           }
           return;
@@ -2543,16 +2624,30 @@ ${rejectedText}`
       if (DEVELOPER_MODE)
         console.warn(`(Dev) Could not resolve authenticated user ID: ${err.message}`);
       const classified = classifyError(err, { stage: 'upload' });
-      if (classified.category === 'bad_cookie') {
-        sendSpooferResultToRenderer({
-          output: `Failed to resolve your Roblox user ID: ${classified.message}\n\nMake sure your cookie is valid.`,
-          success: false,
-        });
-        return;
-      }
-      sendStatusMessage(
-        `Warning: could not resolve user ID before upload (${classified.message}). The app will try Open Cloud upload without an explicit user creator.`,
-      );
+      sendSpooferResultToRenderer({
+        output: `Failed to resolve your Roblox user ID: ${classified.message}\n\nMake sure your cookie is valid before uploading to your user account.`,
+        success: false,
+        failedAnimationIdInput: animationEntries.map(formatAssetEntry).join('\n'),
+        failedCount: animationEntries.length,
+        summary: {
+          mode: 'Upload preflight',
+          total: animationEntries.length,
+          failures: [
+            {
+              stage: 'upload',
+              category: classified.category,
+              label: classified.label,
+              reason: classified.message,
+              raw: classified.raw,
+              retryable: classified.retryable === true,
+              suggestedFix: classified.suggestedFix,
+            },
+          ],
+          failureCategories: { [classified.category || 'unknown']: 1 },
+        },
+      });
+      sendStatusMessage('Upload preflight failed - could not resolve Roblox user ID');
+      return;
     }
   }
   let uploadResults = [];
