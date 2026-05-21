@@ -17,6 +17,12 @@ dist-plugin/
 *.blockmap
 *.rbxmx
 
+# Private local tests
+tests/
+tests/**
+launcher/specs/
+launcher/specs/**
+
 # Electron/build caches
 .cache/
 .vite/
@@ -56,6 +62,18 @@ asset-resolution-cache.json
 *.cookie
 *.token
 *.secret
+*.key
+*.pem
+*.p12
+*.pfx
+*.cert
+*.crt
+*.der
+*.mobileprovision
+
+# Test and coverage output
+coverage/
+*.lcov
 
 # Package managers
 npm-debug.log*

@@ -2,12 +2,6 @@ name: Build Launcher Setup
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'launcher/**'
-      - 'launcher/src/assets/**'
-      - '.github/workflows/build-launcher.yml'
 
 permissions:
   contents: read

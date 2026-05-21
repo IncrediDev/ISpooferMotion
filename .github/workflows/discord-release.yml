@@ -121,7 +121,26 @@ jobs:
                       time.sleep(10)
 
               if not asset:
-                  return "VirusTotal results were not attached to this release."
+                  release_body = release.get("body") or ""
+                  lines = []
+                  for line in release_body.splitlines():
+                      if "| `" not in line or "[View scan](" not in line:
+                          continue
+                      cells = [part.strip() for part in line.strip().strip("|").split("|")]
+                      if len(cells) < 3:
+                          continue
+                      name = cells[0].strip("`")
+                      sha256 = cells[1].strip("`")
+                      url_match = re.search(r"\]\(([^)]+)\)", cells[2])
+                      if url_match:
+                          short_hash = sha256[:12] if sha256 else "scan"
+                          lines.append(f"[`{name}`]({url_match.group(1)}) `{short_hash}`")
+                  if lines:
+                      value = "\n".join(lines)
+                      if len(value) > 1000:
+                          return f"Too many VirusTotal links to fit cleanly here. [Open the release notes]({release_url})"
+                      return value
+                  return "See VirusTotal results in the GitHub release notes."
 
               try:
                   payload = json.loads(download_github_asset(asset))

@@ -125,6 +125,13 @@ jobs:
       - name: Verify release assets
         run: npm run release:verify-assets -- --require-virustotal
 
+      - name: Add VirusTotal links to release notes
+        shell: pwsh
+        run: |
+          $notes = Get-Content dist/release-notes.md -Raw
+          $virustotal = Get-Content dist/virustotal-links.md -Raw
+          Set-Content dist/release-notes.md -Value ($notes.TrimEnd() + "`n`n" + $virustotal.TrimEnd() + "`n") -Encoding utf8
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v3
         with:
@@ -136,5 +143,3 @@ jobs:
             launcher/dist/*.exe
             dist/*.exe
             dist/*.rbxmx
-            dist/virustotal-links.md
-            dist/virustotal-links.json

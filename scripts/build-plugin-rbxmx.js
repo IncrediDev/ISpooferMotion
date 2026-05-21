@@ -1,5 +1,7 @@
 'use strict';
 
+// Builds the Roblox plugin file from the Lua source. Keep paths explicit so release checks can catch missing files.
+
 const fs = require('fs');
 const path = require('path');
 
@@ -55,14 +57,37 @@ function scriptItem(className, ref, name, source, disabled = false) {
 
 fs.mkdirSync(outDir, { recursive: true });
 
-const pluginSource = fs.readFileSync(path.join(root, 'plugin.lua'), 'utf8');
-const getIdsFactorySource = fs.readFileSync(path.join(root, 'scripts', 'GetIdsUIFactory.lua'), 'utf8');
-const replaceIdsFactorySource = fs.readFileSync(path.join(root, 'scripts', 'ReplaceIdsUIFactory.lua'), 'utf8');
+const pluginSource = fs
+  .readFileSync(path.join(root, 'src', 'plugin', 'plugin.lua'), 'utf8')
+  .replace(/__ISPOOFERMOTION_VERSION__/g, version);
+const getIdsFactorySource = fs.readFileSync(
+  path.join(root, 'src', 'plugin', 'modules', 'GetIdsUIFactory.lua'),
+  'utf8',
+);
+const replaceIdsFactorySource = fs.readFileSync(
+  path.join(root, 'src', 'plugin', 'modules', 'ReplaceIdsUIFactory.lua'),
+  'utf8',
+);
 
-const mainScript = scriptItem('Script', 'ISpooferMotionPlugin', 'ISpooferMotion', pluginSource, false);
-const assetsFolder = item('Folder', 'Assets', [propString('Name', 'Assets')],
+const mainScript = scriptItem(
+  'Script',
+  'ISpooferMotionPlugin',
+  'ISpooferMotion',
+  pluginSource,
+  false,
+);
+const assetsFolder = item(
+  'Folder',
+  'Assets',
+  [propString('Name', 'Assets')],
   scriptItem('ModuleScript', 'GetIdsUIFactory', 'GetIdsUIFactory', getIdsFactorySource, false) +
-  scriptItem('ModuleScript', 'ReplaceIdsUIFactory', 'ReplaceIdsUIFactory', replaceIdsFactorySource, false)
+    scriptItem(
+      'ModuleScript',
+      'ReplaceIdsUIFactory',
+      'ReplaceIdsUIFactory',
+      replaceIdsFactorySource,
+      false,
+    ),
 );
 
 const xml = `<?xml version="1.0" encoding="utf-8"?>
