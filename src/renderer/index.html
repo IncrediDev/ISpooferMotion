@@ -30,7 +30,14 @@
             </svg>
             <span>Spoofer</span>
           </button>
-          <button class="side-link" type="button" data-view="queue" title="Activity">
+          <button
+            class="side-link"
+            type="button"
+            data-view="queue"
+            title="Activity"
+            disabled
+            aria-disabled="true"
+          >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M5.75 4h7.5a1.75 1.75 0 0 1 1.75 1.75v2.5A1.75 1.75 0 0 1 13.25 10h-7.5A1.75 1.75 0 0 1 4 8.25v-2.5A1.75 1.75 0 0 1 5.75 4Zm5 10h7.5A1.75 1.75 0 0 1 20 15.75v2.5A1.75 1.75 0 0 1 18.25 20h-7.5A1.75 1.75 0 0 1 9 18.25v-2.5A1.75 1.75 0 0 1 10.75 14ZM6 15h1.5v2H6v2H4v-2H2.5v-2H4v-2h2v2Zm11-9.25h-3v2.5h3v-2.5Zm1 10h-7v2.5h7v-2.5Z"
@@ -38,7 +45,14 @@
             </svg>
             <span>Activity</span>
           </button>
-          <button class="side-link" type="button" data-view="profiles" title="Profiles">
+          <button
+            class="side-link"
+            type="button"
+            data-view="profiles"
+            title="Profiles"
+            disabled
+            aria-disabled="true"
+          >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M12 3a4.25 4.25 0 1 1 0 8.5A4.25 4.25 0 0 1 12 3Zm0 2a2.25 2.25 0 1 0 0 4.5A2.25 2.25 0 0 0 12 5Zm-7 14.15C5 15.9 7.92 13.5 12 13.5s7 2.4 7 5.65V21H5v-1.85Zm2.08-.15h9.84c-.13-1.97-2.05-3.5-4.92-3.5S7.21 17.03 7.08 19Z"
@@ -46,7 +60,14 @@
             </svg>
             <span>Profiles</span>
           </button>
-          <button class="side-link" type="button" data-view="settings" title="Settings">
+          <button
+            class="side-link"
+            type="button"
+            data-view="settings"
+            title="Settings"
+            disabled
+            aria-disabled="true"
+          >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M10.65 3h2.7l.42 2.14c.53.18 1.03.4 1.5.7l1.82-1.2 1.91 1.91-1.2 1.82c.29.47.52.97.7 1.5l2.14.42v2.7l-2.14.42c-.18.53-.41 1.03-.7 1.5l1.2 1.82-1.91 1.91-1.82-1.2c-.47.29-.97.52-1.5.7L13.35 21h-2.7l-.42-2.14a7.08 7.08 0 0 1-1.5-.7l-1.82 1.2L5 17.45l1.2-1.82a7.08 7.08 0 0 1-.7-1.5L3.36 13.7V11l2.14-.42c.18-.53.41-1.03.7-1.5L5 7.26l1.91-1.91 1.82 1.2c.47-.29.97-.52 1.5-.7L10.65 3ZM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"
@@ -106,6 +127,8 @@
               type="button"
               aria-haspopup="listbox"
               aria-expanded="false"
+              disabled
+              aria-disabled="true"
             >
               <span class="profile-trigger-label" id="profile-trigger-label">Profile 1</span>
               <svg class="profile-trigger-arrow" viewBox="0 0 24 24" aria-hidden="true">
@@ -190,964 +213,244 @@
             data-view-panel="spoofer"
             aria-label="Spoofer"
           >
-            <div class="spoofer-page ui-page ui-page-grid">
-              <section class="spoofer-workflow ui-card ui-scroll" aria-label="Spoofer workflow">
-                <label class="spoofer-input-block ui-field" for="spoofer-input">
-                  <span id="spoofer-input-label">Asset IDs</span>
+            <div class="spoofer-page" id="spoofer-page">
+              <div class="spoofer-top-row">
+                <section class="spoofer-panel asset-panel" aria-labelledby="spoofer-assets-title">
+                  <div class="section-heading compact-heading">
+                    <h2 id="spoofer-assets-title">Asset IDs</h2>
+                  </div>
+
                   <textarea
-                    class="ui-textarea"
-                    id="spoofer-input"
+                    class="ui-textarea code-input asset-input"
+                    id="animationId"
+                    name="animationId"
                     spellcheck="false"
-                    placeholder="[123456] [Walk] [User:1],&#10;https://www.roblox.com/library/123456/Walk&#10;123456"
+                    placeholder="One asset ID or URL per line. Supports [assetId], [name], and [userId]."
                   ></textarea>
-                </label>
 
-                <div class="spoofer-options">
-                  <label class="switch-row ui-toggle">
-                    <span>Download only</span>
-                    <input id="spoofer-download-only" type="checkbox" />
-                    <i></i>
-                  </label>
-                  <label class="switch-row ui-toggle">
-                    <span>Enable upload/spoofing</span>
-                    <input id="spoofer-enable-spoofing" type="checkbox" checked />
-                    <i></i>
-                  </label>
-                  <label class="switch-row ui-toggle sound-toggle-row">
-                    <span
-                      >Sound mode
-                      <small class="sound-toggle-auto" id="sound-toggle-auto">Auto</small></span
-                    >
-                    <input id="spoofer-sound-toggle" type="checkbox" />
-                    <i></i>
-                  </label>
-                </div>
-
-                <label class="spoofer-cookie-field ui-field" for="spoofer-cookie-input">
-                  <span>Roblox cookie</span>
-                  <input
-                    class="ui-input"
-                    id="spoofer-cookie-input"
-                    type="password"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder="Enable manual cookie in Profiles"
-                  />
-                </label>
-
-                <details class="spoofer-advanced">
-                  <summary>
-                    <span>Advanced</span>
-                    <svg class="spoofer-advanced-arrow" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="m7 9.5 5 5 5-5 1.4 1.4L12 17.3l-6.4-6.4L7 9.5Z" />
-                    </svg>
-                  </summary>
-                  <div class="spoofer-advanced-content">
-                    <div class="spoofer-advanced-grid ui-panel-grid">
-                      <label>
-                        <span>Override place ID</span>
+                  <details class="advanced-panel" id="advanced-options-panel-wrap">
+                    <summary id="advanced-options-btn">
+                      <span>Advanced</span>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M7.4 9.2 12 13.8l4.6-4.6L18 10.6l-6 6-6-6 1.4-1.4Z" />
+                      </svg>
+                    </summary>
+                    <div class="advanced-grid" id="advanced-options-panel">
+                      <label class="spoofer-field" for="maxPlaceIds">
+                        <strong>Max place IDs</strong>
                         <input
                           class="ui-input"
-                          id="spoofer-override-place"
-                          type="text"
-                          inputmode="numeric"
-                          pattern="[0-9]*"
-                        />
-                      </label>
-                      <label>
-                        <span>Max place IDs</span>
-                        <input
-                          class="ui-input"
-                          id="spoofer-max-place-ids"
-                          type="text"
-                          inputmode="numeric"
-                          pattern="[0-9]*"
+                          type="number"
+                          id="maxPlaceIds"
+                          name="maxPlaceIds"
                           value="10"
+                          min="10"
+                          max="50"
                         />
                       </label>
-                      <label>
-                        <span>Place retries</span>
+                      <label class="spoofer-field" for="maxPlaceIdRetries">
+                        <strong>Max retries</strong>
                         <input
                           class="ui-input"
-                          id="spoofer-place-retries"
-                          type="text"
-                          inputmode="numeric"
-                          pattern="[0-9]*"
+                          type="number"
+                          id="maxPlaceIdRetries"
+                          name="maxPlaceIdRetries"
                           value="3"
+                          min="1"
+                          max="10"
                         />
                       </label>
-                      <label>
-                        <span>Upload retries</span>
+                      <label class="spoofer-field" for="overridePlaceId">
+                        <strong>Override place ID</strong>
                         <input
                           class="ui-input"
-                          id="spoofer-upload-retries"
                           type="text"
-                          inputmode="numeric"
-                          pattern="[0-9]*"
+                          id="overridePlaceId"
+                          name="overridePlaceId"
+                          placeholder="Auto-fetch when empty"
+                        />
+                      </label>
+                      <label class="spoofer-field" for="uploadRetries">
+                        <strong>Upload retries</strong>
+                        <input
+                          class="ui-input"
+                          type="number"
+                          id="uploadRetries"
+                          name="uploadRetries"
                           value="3"
+                          min="1"
+                          max="10"
+                        />
+                      </label>
+                      <label class="spoofer-field" for="uploadRetryDelay">
+                        <strong>Retry delay (ms)</strong>
+                        <input
+                          class="ui-input"
+                          type="number"
+                          id="uploadRetryDelay"
+                          name="uploadRetryDelay"
+                          value="5000"
+                          min="1000"
+                          max="60000"
+                          step="1000"
                         />
                       </label>
                     </div>
-                  </div>
-                </details>
+                  </details>
 
-                <div class="spoofer-run-controls ui-action-row">
-                  <button class="primary-action ui-button-primary" type="button" id="spoofer-start">
-                    Start
-                  </button>
-                  <button class="ui-button" type="button" id="spoofer-pause">Pause</button>
-                  <button class="ui-button" type="button" id="spoofer-resume">Resume</button>
-                  <button class="ui-button ui-button-danger" type="button" id="spoofer-cancel">
-                    Cancel
-                  </button>
-                </div>
-              </section>
-
-              <aside class="spoofer-preview ui-panel-grid ui-scroll" aria-label="Run preview">
-                <section class="spoofer-card ui-card spoofer-profile-summary">
-                  <div class="spoofer-card-heading">
-                    <h2>Target</h2>
-                    <span id="spoofer-profile-name">Profile</span>
-                  </div>
-                  <dl>
-                    <dt>Upload target</dt>
-                    <dd id="spoofer-target-summary">User target</dd>
-                    <dt>API key</dt>
-                    <dd id="spoofer-api-summary">Not saved</dd>
-                    <dt>Cookie</dt>
-                    <dd id="spoofer-cookie-summary">Auto detect</dd>
-                    <dt>Limits</dt>
-                    <dd id="spoofer-limits-summary">20 batch / 10 workers</dd>
-                  </dl>
-                </section>
-
-                <section class="spoofer-card ui-card spoofer-preflight">
-                  <div class="spoofer-card-heading">
-                    <h2>Preflight</h2>
-                    <span id="spoofer-detected-type">Animations</span>
-                  </div>
-                  <div class="spoofer-preflight-grid ui-metric-grid">
-                    <div class="ui-metric">
-                      <span>Parsed</span><strong id="spoofer-parsed-count">0</strong>
-                    </div>
-                    <div class="ui-metric">
-                      <span>Duplicates</span><strong id="spoofer-duplicate-count">0</strong>
-                    </div>
-                    <div class="ui-metric">
-                      <span>Invalid</span><strong id="spoofer-invalid-count">0</strong>
-                    </div>
-                    <div class="ui-metric">
-                      <span>Ready</span><strong id="spoofer-ready-count">0</strong>
-                    </div>
-                  </div>
-                  <p id="spoofer-preflight-note">Paste asset IDs to begin.</p>
-                </section>
-
-                <section
-                  class="spoofer-live"
-                  id="spoofer-live-popup"
-                  aria-hidden="true"
-                  aria-live="polite"
-                >
-                  <div class="spoofer-live-meta">
-                    <strong id="spoofer-live-stage">Waiting</strong>
-                    <span id="spoofer-live-elapsed">0s</span>
-                  </div>
-                  <div class="spoofer-live-strip">
-                    <span class="queue-progress ui-progress"
-                      ><i id="spoofer-live-progress" style="width: 0%"></i
-                      ><b id="spoofer-live-progress-label">0%</b></span
-                    >
-                  </div>
-                </section>
-              </aside>
-
-              <section class="spoofer-card ui-card ui-bottom-panel spoofer-output">
-                <div class="spoofer-card-heading">
-                  <h2>Output</h2>
-                  <span id="spoofer-output-state">No run yet</span>
-                </div>
-                <textarea
-                  class="ui-textarea"
-                  id="spoofer-output"
-                  readonly
-                  spellcheck="false"
-                  placeholder="Run output appears here."
-                ></textarea>
-                <div class="spoofer-output-actions ui-action-row">
-                  <button class="ui-button" type="button" id="spoofer-copy-output">
-                    Copy output
-                  </button>
-                  <button class="ui-button" type="button" id="spoofer-copy-retry">
-                    Copy retry input
-                  </button>
-                  <button class="ui-button" type="button" id="spoofer-open-activity">
-                    Open Activity
-                  </button>
-                </div>
-              </section>
-            </div>
-          </section>
-          <section class="view queue-view" data-view-panel="queue" aria-label="Activity">
-            <div class="activity-page ui-page ui-page-stack">
-              <div
-                class="activity-tabs ui-tab-list ui-toolbar"
-                role="tablist"
-                aria-label="Activity views"
-              >
-                <button
-                  class="ui-tab active"
-                  type="button"
-                  role="tab"
-                  aria-selected="true"
-                  data-activity-tab="queue"
-                >
-                  Queue
-                </button>
-                <button
-                  class="ui-tab"
-                  type="button"
-                  role="tab"
-                  aria-selected="false"
-                  data-activity-tab="report"
-                >
-                  Run Report
-                </button>
-              </div>
-              <div class="activity-tab-panel is-active" data-activity-panel="queue">
-                <div class="queue-page ui-page-stack">
-                  <section class="queue-summary-strip ui-card" aria-label="Queue summary">
-                    <div class="queue-summary-status">
-                      <span id="queue-status">No active queue</span>
-                      <strong id="queue-mode">Waiting for a run</strong>
-                    </div>
-                    <div class="queue-summary-metrics ui-metric-grid" aria-label="Queue metrics">
-                      <div class="ui-metric">
-                        <span>Total</span><strong id="queue-metric-total">0</strong>
-                      </div>
-                      <div class="ui-metric">
-                        <span>Active</span><strong id="queue-metric-active">0</strong>
-                      </div>
-                      <div class="ui-metric">
-                        <span>Queued</span><strong id="queue-metric-queued">0</strong>
-                      </div>
-                      <div class="ui-metric">
-                        <span>Completed</span><strong id="queue-metric-completed">0</strong>
-                      </div>
-                      <div class="ui-metric">
-                        <span>Failed</span><strong id="queue-metric-failed">0</strong>
-                      </div>
-                      <div class="ui-metric">
-                        <span>Progress</span><strong id="queue-metric-progress">0%</strong>
-                      </div>
-                    </div>
-                  </section>
-
-                  <section class="queue-actions ui-card ui-action-panel" aria-label="Queue actions">
-                    <div
-                      class="queue-filters ui-filter-list ui-toolbar"
-                      id="queue-filters"
-                      role="toolbar"
-                      aria-label="Queue filters"
-                    >
-                      <button class="ui-filter active" type="button" data-queue-filter="all">
-                        All
-                      </button>
-                      <button class="ui-filter" type="button" data-queue-filter="active">
-                        Active
-                      </button>
-                      <button class="ui-filter" type="button" data-queue-filter="queued">
-                        Queued
-                      </button>
-                      <button class="ui-filter" type="button" data-queue-filter="completed">
-                        Completed
-                      </button>
-                      <button class="ui-filter" type="button" data-queue-filter="failed">
-                        Failed
-                      </button>
-                      <button class="ui-filter" type="button" data-queue-filter="download">
-                        Downloads
-                      </button>
-                      <button class="ui-filter" type="button" data-queue-filter="upload">
-                        Uploads
-                      </button>
-                    </div>
-                    <label class="queue-search" for="queue-search">
-                      <span>Search queue</span>
-                      <input
-                        class="ui-input"
-                        id="queue-search"
-                        type="search"
-                        placeholder="Asset ID, name, status, message"
-                      />
-                    </label>
-                    <div class="queue-buttons ui-action-row">
-                      <button class="ui-button" type="button" id="queue-pause">Pause</button>
-                      <button class="ui-button" type="button" id="queue-resume">Resume</button>
-                      <button class="ui-button" type="button" id="queue-cancel">Cancel</button>
-                      <button class="ui-button" type="button" id="queue-clear-done">
-                        Clear done
-                      </button>
-                      <button class="ui-button ui-button-danger" type="button" id="queue-clear-all">
-                        Clear queue
-                      </button>
-                      <button class="ui-button" type="button" id="queue-open-logs">
-                        Open logs
-                      </button>
-                    </div>
-                  </section>
-
-                  <section class="queue-main ui-split ui-detail-layout" aria-label="Queue details">
-                    <div class="queue-table-wrap ui-panel ui-scroll">
-                      <table class="queue-table ui-table">
-                        <thead>
-                          <tr>
-                            <th>Asset</th>
-                            <th>Direction</th>
-                            <th>Status</th>
-                            <th>Progress</th>
-                            <th>Message</th>
-                          </tr>
-                        </thead>
-                        <tbody id="queue-rows"></tbody>
-                      </table>
-                      <div class="queue-empty ui-empty-state" id="queue-empty">No queue yet.</div>
-                    </div>
-                    <aside
-                      class="queue-detail ui-card ui-scroll ui-details"
-                      aria-label="Selected queue item"
-                    >
-                      <h2>Item details</h2>
-                      <dl id="queue-detail-list"></dl>
-                      <div class="queue-detail-block">
-                        <span>Error</span>
-                        <pre class="ui-code-block" id="queue-detail-error">
-Select a queue item.</pre
-                        >
-                      </div>
-                      <div class="queue-detail-block">
-                        <span>Latest message</span>
-                        <p class="ui-code-block" id="queue-detail-message">Select a queue item.</p>
-                      </div>
-                    </aside>
-                  </section>
-                </div>
-              </div>
-              <div class="activity-tab-panel" data-activity-panel="report"></div>
-            </div>
-          </section>
-          <section
-            class="view run-report-view"
-            data-view-panel="run-report"
-            aria-label="Run Report"
-          >
-            <div class="run-report-page ui-page-stack">
-              <section class="run-summary-strip ui-card" aria-label="Latest run summary">
-                <div class="run-summary-status">
-                  <span id="run-report-status">No run report yet</span>
-                  <strong id="run-report-mode">Waiting for a completed run</strong>
-                </div>
-                <div class="run-summary-metrics ui-metric-grid" aria-label="Run metrics">
-                  <div class="ui-metric">
-                    <span>Total</span><strong id="run-metric-total">0</strong>
-                  </div>
-                  <div class="ui-metric">
-                    <span>Successful</span><strong id="run-metric-success">0</strong>
-                  </div>
-                  <div class="ui-metric">
-                    <span>Failed</span><strong id="run-metric-failed">0</strong>
-                  </div>
-                  <div class="ui-metric">
-                    <span>Skipped</span><strong id="run-metric-skipped">0</strong>
-                  </div>
-                  <div class="ui-metric">
-                    <span>Duration</span><strong id="run-metric-duration">0s</strong>
-                  </div>
-                  <div class="ui-metric">
-                    <span>Finished</span><strong id="run-metric-finished">Never</strong>
-                  </div>
-                </div>
-              </section>
-
-              <section
-                class="run-report-actions ui-card ui-action-panel"
-                aria-label="Run report actions"
-              >
-                <div
-                  class="run-report-filters ui-filter-list ui-toolbar"
-                  id="run-report-filters"
-                  role="toolbar"
-                  aria-label="Report filters"
-                >
-                  <button class="ui-filter active" type="button" data-report-filter="all">
-                    All
-                  </button>
-                  <button class="ui-filter" type="button" data-report-filter="failed">
-                    Failed
-                  </button>
-                  <button class="ui-filter" type="button" data-report-filter="successful">
-                    Successful
-                  </button>
-                  <button class="ui-filter" type="button" data-report-filter="skipped">
-                    Skipped
-                  </button>
-                  <button class="ui-filter" type="button" data-report-filter="animation">
-                    Animations
-                  </button>
-                  <button class="ui-filter" type="button" data-report-filter="sound">Sounds</button>
-                </div>
-                <label class="run-report-search" for="run-report-search">
-                  <span>Search report</span>
-                  <input
-                    class="ui-input"
-                    id="run-report-search"
-                    type="search"
-                    placeholder="Asset ID, creator, reason, new ID"
-                  />
-                </label>
-                <div class="run-report-buttons ui-action-row">
-                  <button class="ui-button" type="button" id="run-copy-failed">
-                    Copy failed IDs
-                  </button>
-                  <button class="ui-button" type="button" id="run-copy-mappings">
-                    Copy mappings
-                  </button>
-                  <button class="ui-button" type="button" id="run-export-report">
-                    Export report
-                  </button>
-                  <button class="ui-button" type="button" id="run-open-logs">Open logs</button>
-                  <button class="ui-button" type="button" id="run-retry-failed">
-                    Retry failed
-                  </button>
-                  <button class="ui-button ui-button-danger" type="button" id="run-clear-report">
-                    Clear report
-                  </button>
-                </div>
-              </section>
-
-              <section
-                class="run-report-main ui-split ui-detail-layout"
-                aria-label="Run report details"
-              >
-                <div class="run-report-table-wrap ui-panel ui-scroll">
-                  <table class="run-report-table ui-table">
-                    <thead>
-                      <tr>
-                        <th>Asset</th>
-                        <th>Type</th>
-                        <th>Source creator</th>
-                        <th>Result</th>
-                        <th>Reason</th>
-                        <th>New ID</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody id="run-report-rows"></tbody>
-                  </table>
-                  <div class="run-report-empty ui-empty-state" id="run-report-empty">
-                    No run report yet.
-                  </div>
-                </div>
-                <aside
-                  class="run-report-detail ui-card ui-scroll ui-details"
-                  aria-label="Selected run item"
-                >
-                  <h2>Item details</h2>
-                  <dl id="run-detail-list"></dl>
-                  <div class="run-detail-block">
-                    <span>Raw error</span>
-                    <pre class="ui-code-block" id="run-detail-raw">Select a run item.</pre>
-                  </div>
-                  <div class="run-detail-block">
-                    <span>Suggested fix</span>
-                    <p class="ui-code-block" id="run-detail-fix">Select a run item.</p>
-                  </div>
-                  <div class="run-detail-block">
-                    <span>Mapping line</span>
-                    <code class="ui-code-block" id="run-detail-mapping">None</code>
-                  </div>
-                </aside>
-              </section>
-            </div>
-          </section>
-
-          <section class="view profiles-view" data-view-panel="profiles" aria-label="Profiles">
-            <div class="profiles-page ui-page ui-split">
-              <aside class="profiles-list-panel ui-card" aria-label="Profiles list">
-                <div class="profile-panel-heading">
-                  <h2>
-                    Profiles
-                    <button
-                      class="help-dot ui-help-dot"
-                      type="button"
-                      aria-label="Profiles help"
-                      data-tip-title="Profiles"
-                      data-tip-body="Profiles keep separate group targets, API key state, cookie preferences, and account identity details in the existing local settings store."
-                    >
-                      ?
+                  <div class="asset-actions" aria-label="Run controls">
+                    <button class="primary-action" id="run-spoofer-btn" type="button">Start</button>
+                    <button class="ui-button" id="pause-resume-spoofer-btn" type="button">
+                      Pause
                     </button>
-                  </h2>
-                </div>
-                <div
-                  class="profiles-list"
-                  id="profiles-list"
-                  role="listbox"
-                  aria-label="Saved profiles"
-                ></div>
-                <div class="profile-list-actions ui-action-row">
-                  <button
-                    class="ui-button"
-                    type="button"
-                    id="profile-create"
-                    title="Create a new empty profile"
-                  >
-                    Create
-                  </button>
-                  <button
-                    class="ui-button"
-                    type="button"
-                    id="profile-duplicate"
-                    title="Duplicate the selected profile"
-                  >
-                    Duplicate
-                  </button>
-                  <button
-                    class="ui-button"
-                    type="button"
-                    id="profile-rename"
-                    title="Rename the selected profile"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    class="ui-button ui-button-danger"
-                    type="button"
-                    id="profile-delete"
-                    title="Delete the selected profile"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </aside>
+                  </div>
+                </section>
 
-              <section class="profile-editor-panel ui-scroll" aria-label="Selected profile editor">
-                <div class="profile-editor-grid ui-panel-grid">
-                  <article class="profile-card ui-card profile-card-identity">
-                    <div class="profile-card-heading">
-                      <h2>
-                        Roblox identity
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Roblox identity help"
-                          data-tip-title="Roblox identity"
-                          data-tip-body="Shows the Roblox profile and group currently associated with the selected app profile. These values are profile-specific."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                    <div
-                      class="identity-preview ui-panel-grid"
-                      id="identity-preview"
-                      aria-hidden="true"
-                    >
-                      <div class="identity-row ui-metric" data-identity-row="user">
-                        <img
-                          class="identity-avatar identity-avatar-user"
-                          id="identity-user-avatar"
-                          alt=""
-                        />
-                        <div class="identity-copy">
-                          <span>Roblox profile</span>
-                          <strong id="identity-user-name"></strong>
-                          <small id="identity-user-meta"></small>
-                        </div>
-                      </div>
-                      <div class="identity-row ui-metric" data-identity-row="group">
-                        <img
-                          class="identity-avatar identity-avatar-group"
-                          id="identity-group-avatar"
-                          alt=""
-                        />
-                        <div class="identity-copy">
-                          <span>Upload target</span>
-                          <strong id="identity-group-name"></strong>
-                          <small id="identity-group-meta"></small>
-                        </div>
-                      </div>
-                      <button
-                        class="ui-button"
-                        type="button"
-                        id="profile-refresh-roblox"
-                        title="Refresh the Roblox profile using the selected profile's cookie settings"
-                      >
-                        Refresh Roblox profile
-                      </button>
-                    </div>
-                  </article>
+                <aside class="spoofer-panel setup-panel" aria-label="Run setup">
+                  <div class="section-heading compact-heading">
+                    <h2>Run setup</h2>
+                  </div>
 
-                  <article class="profile-card ui-card profile-card-target">
-                    <div class="profile-card-heading">
-                      <h2>
-                        Target
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Target help"
-                          data-tip-title="Target"
-                          data-tip-body="Set a numeric Roblox group ID when uploads should target a group. Leave group target empty to use the authenticated user target."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                    <label class="profile-field" for="profile-group-id">
-                      <span>Group target</span>
+                  <div class="option-stack" aria-label="Run options">
+                    <label class="option-row" for="download-only">
+                      <span>Download only</span>
+                      <span class="switch"
+                        ><input type="checkbox" id="download-only" /><i></i
+                      ></span>
+                    </label>
+
+                    <label class="option-row" for="spoof-sounds">
+                      <span>Sound mode</span>
+                      <span class="switch"><input type="checkbox" id="spoof-sounds" /><i></i></span>
+                    </label>
+                  </div>
+
+                  <div class="setup-fields">
+                    <label class="spoofer-field" for="robloxCookie">
+                      <strong>Roblox cookie</strong>
                       <input
                         class="ui-input"
-                        id="profile-group-id"
-                        type="text"
-                        inputmode="numeric"
-                        pattern="[0-9]*"
-                        placeholder="User target"
-                        title="Numeric Roblox group ID. Leave empty for user target."
+                        type="password"
+                        id="robloxCookie"
+                        name="robloxCookie"
+                        autocomplete="off"
+                        placeholder="Auto detect is enabled"
                       />
                     </label>
-                  </article>
 
-                  <article class="profile-card ui-card profile-card-auth">
-                    <div class="profile-card-heading">
-                      <h2>
-                        Authentication
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Authentication help"
-                          data-tip-title="Authentication"
-                          data-tip-body="Auto detect cookie lets the app read Roblox Studio credentials when possible. API key status shows whether this profile has an upload key saved."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                    <label
-                      class="switch-row ui-toggle profile-switch"
-                      title="Auto-detect the Roblox cookie from Roblox Studio when this profile runs."
-                    >
+                    <label class="option-row inline-option" for="autoDetectCookie">
                       <span>Auto detect cookie</span>
-                      <input id="profile-auto-cookie" type="checkbox" />
-                      <i></i>
+                      <span class="switch"
+                        ><input type="checkbox" id="autoDetectCookie" checked /><i></i
+                      ></span>
                     </label>
-                    <div class="profile-field">
-                      <label class="profile-field-label" for="profile-api-key-input"
-                        >Open Cloud API key
-                        <strong id="profile-api-status">Not saved</strong></label
-                      >
-                      <div class="profile-input-action ui-input-action">
+
+                    <label class="spoofer-field" for="openCloudApiKey" id="api-key-group">
+                      <strong>Open Cloud API key</strong>
+                      <div class="input-button-row api-key-row embedded-button-row">
                         <input
                           class="ui-input"
-                          id="profile-api-key-input"
                           type="password"
+                          id="openCloudApiKey"
+                          name="openCloudApiKey"
                           autocomplete="off"
-                          spellcheck="false"
-                          placeholder="Paste API key"
-                          title="Roblox Open Cloud API key saved only for this profile."
+                          placeholder="Uploads require Asset Read + Write permissions"
                         />
                         <button
                           class="ui-button"
+                          id="get-api-key-btn"
                           type="button"
-                          id="profile-api-key-get"
-                          title="Open the Roblox Creator Dashboard page for creating Open Cloud API keys"
+                          data-url="https://create.roblox.com/dashboard/credentials"
                         >
                           Get
                         </button>
                       </div>
-                    </div>
-                  </article>
+                    </label>
 
-                  <article class="profile-card ui-card profile-card-actions">
-                    <div class="profile-card-heading">
-                      <h2>
-                        Safe actions
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Safe actions help"
-                          data-tip-title="Safe actions"
-                          data-tip-body="Reset only the selected profile settings or clear credentials saved for that profile. Destructive actions ask for confirmation first."
-                        >
-                          ?
+                    <label class="spoofer-field" for="groupId">
+                      <strong>Group ID</strong>
+                      <input
+                        class="ui-input"
+                        type="text"
+                        id="groupId"
+                        name="groupId"
+                        autocomplete="off"
+                        placeholder="Blank for user uploads"
+                      />
+                    </label>
+                  </div>
+
+                  <div class="download-folder-row" id="download-folder-group" hidden>
+                    <label class="spoofer-field" for="downloadFolder">
+                      <strong>Download folder</strong>
+                      <div class="input-button-row">
+                        <input
+                          class="ui-input"
+                          type="text"
+                          id="downloadFolder"
+                          name="downloadFolder"
+                          placeholder="Select folder for downloads"
+                          readonly
+                        />
+                        <button class="ui-button" id="select-folder-btn" type="button">
+                          Browse
                         </button>
-                      </h2>
-                    </div>
-                    <div class="profile-safe-actions ui-action-row">
-                      <button
-                        class="ui-button"
-                        type="button"
-                        id="profile-reset"
-                        title="Reset non-secret settings for the selected profile"
-                      >
-                        Reset profile settings
-                      </button>
-                      <button
-                        class="ui-button ui-button-danger"
-                        type="button"
-                        id="profile-clear-credentials"
-                        title="Clear saved cookie and API key for the selected profile"
-                      >
-                        Clear saved credentials
-                      </button>
-                    </div>
-                  </article>
+                      </div>
+                    </label>
+                  </div>
+                </aside>
+              </div>
+
+              <div class="session-banner" id="session-banner" hidden>
+                <span
+                  >Incomplete session found. <strong id="session-pending-count"></strong> asset(s)
+                  pending.</span
+                >
+                <div>
+                  <button class="ui-button" id="session-resume-btn" type="button">Resume</button>
+                  <button class="ui-button" id="session-discard-btn" type="button">Discard</button>
+                </div>
+              </div>
+
+              <section class="spoofer-output-panel" aria-labelledby="output-title">
+                <div class="section-heading output-heading">
+                  <h2 id="output-title">Output</h2>
+                  <span class="spoofer-status-text" id="status-text">No run yet</span>
+                </div>
+                <textarea
+                  class="ui-textarea output-textarea"
+                  id="output-data"
+                  readonly
+                  placeholder="Run output appears here."
+                ></textarea>
+                <div class="output-actions">
+                  <button class="ui-button" id="copy-output-btn" type="button">Copy output</button>
+                  <button class="ui-button" id="copy-retry-input-btn" type="button">
+                    Copy retry input
+                  </button>
                 </div>
               </section>
             </div>
           </section>
-          <section class="view settings-view" data-view-panel="settings" aria-label="Settings">
-            <div class="settings-page ui-page ui-scroll">
-              <div class="settings-grid ui-panel-grid">
-                <article class="settings-card ui-card settings-card-queue">
-                  <div class="card-heading compact">
-                    <div>
-                      <h2>
-                        Queue / download limits
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Queue and download limits help"
-                          data-tip-title="Queue / download limits"
-                          data-tip-body="Controls how many assets are prepared per batch and how many downloads can run at once. Higher values can be faster, but very high values can hit network or Roblox limits."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                  </div>
-                  <div class="settings-fields two-col ui-panel-grid">
-                    <div class="number-field">
-                      <span class="setting-label-row">
-                        <label for="queue-batch-size">Queue batch size</label>
-                      </span>
-                      <div class="number-input-shell ui-input-action">
-                        <input
-                          class="ui-input"
-                          id="queue-batch-size"
-                          type="text"
-                          value="20"
-                          data-setting="queueBatchSize"
-                          data-default-value="20"
-                          inputmode="numeric"
-                          pattern="[0-9]*"
-                        />
-                        <button
-                          class="icon-reset ui-icon-button"
-                          type="button"
-                          data-reset-setting="queueBatchSize"
-                          aria-label="Reset queue batch size"
-                          title="Reset"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path
-                              d="M12 5a7 7 0 1 1-6.32 4H3.5A9 9 0 1 0 12 3a8.97 8.97 0 0 0-6.36 2.64L3 3v7h7L7.05 7.05A6.98 6.98 0 0 1 12 5Z"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                    <div class="number-field">
-                      <span class="setting-label-row">
-                        <label for="download-workers">Download workers</label>
-                      </span>
-                      <div class="number-input-shell ui-input-action">
-                        <input
-                          class="ui-input"
-                          id="download-workers"
-                          type="text"
-                          value="10"
-                          data-setting="downloadWorkers"
-                          data-default-value="10"
-                          inputmode="numeric"
-                          pattern="[0-9]*"
-                        />
-                        <button
-                          class="icon-reset ui-icon-button"
-                          type="button"
-                          data-reset-setting="downloadWorkers"
-                          aria-label="Reset download workers"
-                          title="Reset"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path
-                              d="M12 5a7 7 0 1 1-6.32 4H3.5A9 9 0 1 0 12 3a8.97 8.97 0 0 0-6.36 2.64L3 3v7h7L7.05 7.05A6.98 6.98 0 0 1 12 5Z"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </article>
 
-                <article class="settings-card ui-card settings-card-reports">
-                  <div class="card-heading compact">
-                    <div>
-                      <h2>
-                        Reports / logs
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Reports and logs help"
-                          data-tip-title="Reports / logs"
-                          data-tip-body="Save run reports keeps a local history of completed runs. Open logs folder opens the folder used for troubleshooting logs and support files."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                  </div>
-                  <label class="switch-row ui-toggle">
-                    <span>Save run reports</span>
-                    <input type="checkbox" checked data-setting="saveRunReports" />
-                    <i></i>
-                  </label>
-                  <button class="ghost-action ui-button" type="button" data-action="openLogs">
-                    Open logs folder
-                  </button>
-                </article>
+          <section class="view queue-view blank-view" data-view-panel="queue" aria-label="Activity">
+            <div class="blank-page" id="activity-page"></div>
+          </section>
 
-                <article class="settings-card ui-card settings-card-cleanup">
-                  <div class="card-heading compact">
-                    <div>
-                      <h2>
-                        Cache / session cleanup
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Cache and session cleanup help"
-                          data-tip-title="Cache / session cleanup"
-                          data-tip-body="Clear cache removes temporary asset lookup data. Clear session removes saved in-progress run data so the next run starts fresh."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                  </div>
-                  <div class="cleanup-actions ui-action-row">
-                    <button class="ui-button" type="button" data-action="clearCache">
-                      Clear cache
-                    </button>
-                    <button class="ui-button" type="button" data-action="clearSession">
-                      Clear session
-                    </button>
-                  </div>
-                </article>
+          <section
+            class="view profiles-view blank-view"
+            data-view-panel="profiles"
+            aria-label="Profiles"
+          >
+            <div class="blank-page" id="profiles-page"></div>
+          </section>
 
-                <article class="settings-card ui-card settings-card-paths">
-                  <div class="card-heading compact">
-                    <div>
-                      <h2>
-                        File paths
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="File paths help"
-                          data-tip-title="File paths"
-                          data-tip-body="Choose where downloads and saved reports should go. The app remembers these folders locally on this device."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                  </div>
-                  <div class="path-list ui-action-row">
-                    <button class="ui-button" type="button" data-action="chooseDownloads">
-                      <span>Downloads folder</span><strong>Choose</strong>
-                    </button>
-                    <button class="ui-button" type="button" data-action="chooseReports">
-                      <span>Reports folder</span><strong>Choose</strong>
-                    </button>
-                  </div>
-                </article>
-
-                <article class="settings-card ui-card settings-card-support">
-                  <div class="card-heading compact">
-                    <div>
-                      <h2>
-                        Support
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Support help"
-                          data-tip-title="Support"
-                          data-tip-body="Copy debug info or export a support report when troubleshooting a failed run."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                  </div>
-                  <div class="support-actions ui-action-row">
-                    <button class="ui-button" type="button" data-action="copyDebugInfo">
-                      Copy debug info
-                    </button>
-                    <button class="ui-button" type="button" data-action="exportSupportReport">
-                      Export support report
-                    </button>
-                    <button class="ui-button" type="button" data-action="openPlugins">
-                      Open plugins folder
-                    </button>
-                  </div>
-                </article>
-
-                <article class="settings-card ui-card accent-card">
-                  <div class="card-heading compact">
-                    <div>
-                      <h2>
-                        Accent colour
-                        <button
-                          class="help-dot ui-help-dot"
-                          type="button"
-                          aria-label="Accent colour help"
-                          data-tip-title="Accent colour"
-                          data-tip-body="Changes the app highlight colour used for active navigation, focused inputs, toggles, and selected controls. The colour saves automatically."
-                        >
-                          ?
-                        </button>
-                      </h2>
-                    </div>
-                    <div class="accent-control" id="accent-control">
-                      <button
-                        class="accent-swatch"
-                        id="accent-swatch"
-                        type="button"
-                        aria-label="Open accent colour picker"
-                      >
-                        <span></span>
-                      </button>
-                      <input
-                        class="native-accent-picker"
-                        id="accent-picker"
-                        type="color"
-                        value="#4caf50"
-                        aria-label="Accent colour"
-                      />
-                    </div>
-                  </div>
-                </article>
-              </div>
-              <div
-                class="app-notifications"
-                id="app-notifications"
-                aria-live="assertive"
-                aria-atomic="false"
-              ></div>
-              <div
-                class="settings-tooltip ui-tooltip"
-                id="settings-tooltip"
-                role="tooltip"
-                aria-hidden="true"
-              ></div>
-            </div>
+          <section
+            class="view settings-view blank-view"
+            data-view-panel="settings"
+            aria-label="Settings"
+          >
+            <div class="blank-page" id="settings-page"></div>
           </section>
         </section>
       </main>
@@ -1203,44 +506,6 @@ Select a queue item.</pre
         </div>
       </div>
     </div>
-    <div class="donate-gate ui-modal-gate" id="donate-gate" aria-hidden="true">
-      <div
-        class="donate-modal ui-panel ui-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="donate-title"
-      >
-        <span class="donate-kicker">Support the project</span>
-        <h2 id="donate-title">Support Incred and ISpooferMotion</h2>
-        <p class="donate-lead">
-          If you would like to support Incred and ISpooferMotion, you can donate.
-        </p>
-        <div class="donate-benefits ui-card">
-          <strong>Includes Discord benefits</strong>
-          <div class="donate-copy">
-            <p>You will directly support me and my projects.</p>
-            <p>
-              You will get early access to upcoming updates to my projects! Expect to receive
-              updates a week or more before the public and have direct access to contact me and
-              help in the development of my projects.
-            </p>
-          </div>
-          <ul>
-            <li>Support me on a monthly basis</li>
-            <li>Early access to spoofer updates</li>
-          </ul>
-        </div>
-        <div class="donate-actions ui-action-row">
-          <button class="ui-button" type="button" id="donate-close">Maybe later</button>
-          <button class="ui-button donate-never-button" type="button" id="donate-never">
-            Don’t show again
-          </button>
-          <button class="primary-action ui-button-primary" type="button" id="donate-open">
-            Donate
-          </button>
-        </div>
-      </div>
-    </div>
     <div class="confirm-gate ui-modal-gate" id="confirm-gate" aria-hidden="true">
       <div
         class="confirm-modal ui-panel ui-modal"
@@ -1283,6 +548,9 @@ Select a queue item.</pre
       </div>
     </div>
 
+    <script src="./scripts/dom.js"></script>
+    <script src="./scripts/shell.js"></script>
+    <script src="./scripts/spoofer.js"></script>
     <script src="./scripts/app.js"></script>
   </body>
 </html>

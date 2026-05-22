@@ -1,64 +1,61 @@
 #!/usr/bin/env node
-// Local sanity check for paths, syntax, and release basics.
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
+const errors = [];
 
-function run(command, args, cwd = root) {
-  console.log(`> ${[command, ...args].join(' ')}`);
-  const result = spawnSync(command, args, {
-    cwd,
-    stdio: 'inherit',
-    shell: false,
-  });
-  if (result.status !== 0) process.exit(result.status || 1);
+function run(label, command, args) {
+  console.log(`\n> ${label}`);
+  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', shell: false });
+  if (result.status !== 0) errors.push(`${label} failed with exit code ${result.status || 1}`);
 }
 
-function checkJson(file) {
-  JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
-  console.log(`ok ${file}`);
+function exists(relativePath) {
+  if (!fs.existsSync(path.join(root, relativePath))) errors.push(`Missing ${relativePath}`);
 }
 
-function checkFile(file) {
-  if (!fs.existsSync(path.join(root, file))) {
-    console.error(`missing ${file}`);
-    process.exit(1);
-  }
-  console.log(`ok ${file}`);
+run('syntax and package checks', process.execPath, ['scripts/run-syntax-check.js']);
+
+for (const file of [
+  'package.json',
+  'package-lock.json',
+  'src/assets/app_icon.ico',
+  'src/assets/app_icon.png',
+  'launcher/package.json',
+  'launcher/package-lock.json',
+  'launcher/src/assets/app_icon.ico',
+  'launcher/src/assets/app_icon.png',
+  'scripts/build-plugin-rbxmx.js',
+  'scripts/extract-release-notes.js',
+  'scripts/verify-release-assets.js',
+]) exists(file);
+
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const launcherPkg = JSON.parse(fs.readFileSync(path.join(root, 'launcher/package.json'), 'utf8'));
+if (pkg.version !== launcherPkg.version) {
+  errors.push(`App version ${pkg.version} does not match launcher version ${launcherPkg.version}.`);
 }
 
-checkJson('package.json');
-checkJson('launcher/package.json');
-checkFile('scripts/build-plugin-rbxmx.js');
-checkFile('launcher/scripts/build-win.js');
-checkFile('launcher/scripts/after-pack.js');
+if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(pkg.version)) {
+  errors.push(`Version is not semver-compatible: ${pkg.version}`);
+}
 
-checkFile('build/entitlements.mac.plist');
-checkFile('src/assets/app_icon.ico');
-checkFile('src/assets/app_icon.png');
-checkFile('launcher/src/assets/app_icon.ico');
-checkFile('launcher/src/assets/app_icon.png');
+if (!pkg.scripts || !pkg.scripts.test || !pkg.scripts['release:local-check'] || !pkg.scripts['release:hardening-check']) {
+  errors.push('package.json is missing required workflow scripts.');
+}
 
-run('node', ['--check', 'src/core/tasks/index.js']);
-run('node', ['--check', 'scripts/upload-virustotal-release-assets.js']);
-run('node', ['--check', 'scripts/release-hardening-check.js']);
-run('node', ['--check', 'scripts/verify-release-assets.js']);
-run('node', ['--check', 'src/main/app.js']);
-run('node', ['--check', 'src/preload/preload.js']);
-run('node', ['--check', 'src/renderer/scripts/app.js']);
-run('node', ['--check', 'src/main/window.js']);
-run('node', ['--check', 'src/main/services/ipc-handlers.js']);
-run('node', ['--check', 'launcher/src/main/main.js']);
-run('node', ['--check', 'launcher/src/preload/preload.js']);
-run('node', ['--check', 'launcher/src/popup/scripts/popup.js']);
-run('node', ['--check', 'launcher/scripts/build-win.js']);
-run('node', ['--check', 'launcher/scripts/after-pack.js']);
-run('node', ['--check', 'scripts/build-plugin-rbxmx.js']);
-run('node', ['scripts/release-hardening-check.js', '--allow-generated-output']);
-run('node', ['scripts/build-plugin-rbxmx.js']);
+if (!launcherPkg.scripts || !launcherPkg.scripts['build:win:release']) {
+  errors.push('launcher/package.json is missing build:win:release.');
+}
 
-console.log('\nlocal release check complete');
+if (errors.length) {
+  console.error('\nRelease local check failed:');
+  for (const error of errors) console.error(`- ${error}`);
+  process.exit(1);
+}
+
+console.log('\nrelease local check passed');

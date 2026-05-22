@@ -128,6 +128,12 @@ end
 game.DescendantAdded:Connect(trackInstance)
 game.DescendantRemoving:Connect(untrackInstance)
 
+local function refreshTrackedInstances()
+  for _, obj in ipairs(game:GetDescendants()) do
+    trackInstance(obj)
+  end
+end
+
 local function sourceFingerprint(source)
   return #source .. ":" .. source:sub(1, 24) .. ":" .. source:sub(-48)
 end
@@ -474,6 +480,22 @@ local function replaceScriptAssetIds(source, idMap, assetType)
     end
   end
 
+  newSource = newSource:gsub("(rbxassetid://%s*)(%d+)", function(prefix, foundId)
+    local replacementId = idMap[foundId]
+    if replacementId then
+      changed = true
+      return prefix .. replacementId
+    end
+  end)
+
+  newSource = newSource:gsub("([?&]id=)(%d+)", function(prefix, foundId)
+    local replacementId = idMap[foundId]
+    if replacementId then
+      changed = true
+      return prefix .. replacementId
+    end
+  end)
+
   return newSource, changed
 end
 
@@ -801,11 +823,27 @@ local function parseReplacementMappings(inputString)
   local invalidLines = {}
   local duplicateLines = {}
 
+  local function firstAssetId(text)
+    return tostring(text or ""):match("(%d%d%d%d%d+)")
+  end
+
+  local function splitMappingLine(line)
+    local left, right = line:match("^(.-)%s*=>%s*(.+)$")
+    if left and right then return left, right end
+    left, right = line:match("^(.-)%s*%-%>%s*(.+)$")
+    if left and right then return left, right end
+    left, right = line:match("^(.-)%s*=%s*(.+)$")
+    if left and right then return left, right end
+    return line:match("^(.-)%s*:%s*(.+)$")
+  end
+
   for lineNumber, rawLine in ipairs(string.split(inputString or "", "\n")) do
     local line = rawLine:gsub("\r", ""):match("^%s*(.-)%s*$")
+    line = line:gsub(",%s*$", "")
     if line ~= "" then
-      local oldId, newId = line:match("^(%d+)%s*[%-%=]>%s*(%d+)$")
-      if not oldId then oldId, newId = line:match("^(%d+)%s*[:=]%s*(%d+)$") end
+      local left, right = splitMappingLine(line)
+      local oldId = firstAssetId(left)
+      local newId = firstAssetId(right)
 
       if oldId and newId and oldId ~= newId then
         if idMap[oldId] then
@@ -839,30 +877,36 @@ local function replaceIds(inputString, onProgress, shouldCancel)
   local toProcess      = {}
   local seen           = {}
 
-  for inst in pairs(scanHitLists.animation) do
-    if inst and inst.Parent then
-      seen[inst] = true
-      table.insert(toProcess, inst)
-    end
-  end
-  for inst in pairs(scanHitLists.sound) do
+  refreshTrackedInstances()
+
+  local function addProcessTarget(inst)
     if inst and inst.Parent and not seen[inst] then
       seen[inst] = true
       table.insert(toProcess, inst)
     end
   end
 
+  for inst in pairs(scanHitLists.animation) do
+    addProcessTarget(inst)
+  end
+  for inst in pairs(scanHitLists.sound) do
+    addProcessTarget(inst)
+  end
+
   local function addTracked(trackSet)
     for inst in pairs(trackSet) do
-      if not seen[inst] then
-        seen[inst] = true
-        table.insert(toProcess, inst)
-      end
+      addProcessTarget(inst)
     end
   end
   addTracked(trackedAnimations)
   addTracked(trackedSounds)
   addTracked(trackedScripts)
+
+  for _, inst in ipairs(game:GetDescendants()) do
+    if inst.ClassName == "Animation" or inst.ClassName == "Sound" or inst:IsA("LuaSourceContainer") then
+      addProcessTarget(inst)
+    end
+  end
 
   local total          = #toProcess
   local processedCount = 0
@@ -973,9 +1017,20 @@ local function replaceIds(inputString, onProgress, shouldCancel)
 
   if #skippedScripts > 0 then
     warn("The following scripts were skipped:\n" .. table.concat(skippedScripts, "\n"))
+  elseif changedCount == 0 then
+    warn("Replacement finished, but no matching old IDs were found in the current place.")
   else
     print("All replacements completed successfully. Changed " .. tostring(changedCount) .. " item(s).")
   end
+
+  return {
+    changed = changedCount,
+    processed = processedCount,
+    total = total,
+    skipped = #skippedScripts,
+    invalid = #invalidLines,
+    duplicates = #duplicateLines,
+  }
 end
 
 -- Generates a summary script detailing execution outcomes.
@@ -1159,7 +1214,7 @@ local function setupReplaceUI(ui)
 
     task.spawn(function()
       local success, err = pcall(function()
-        replaceIds(inputText, function(_, changed, total, processed)
+        return replaceIds(inputText, function(_, changed, total, processed)
           replaceChanged   = tonumber(changed) or replaceChanged
           replaceProcessed = tonumber(processed) or replaceProcessed
           replaceTotal     = tonumber(total) or replaceTotal
@@ -1172,9 +1227,21 @@ local function setupReplaceUI(ui)
         isProcessing = false
         setRunEnabled(true)
         if success then
-          setStatus("Replacement complete. Processed " .. tostring(replaceProcessed)
-            .. "/" .. tostring(replaceTotal) .. "; changed " .. tostring(replaceChanged) .. ".")
-          print("Replacement complete. Check the Output window for details.")
+          local result = err
+          if type(result) == "table" then
+            replaceChanged = tonumber(result.changed) or replaceChanged
+            replaceProcessed = tonumber(result.processed) or replaceProcessed
+            replaceTotal = tonumber(result.total) or replaceTotal
+          end
+          if replaceChanged > 0 then
+            setStatus("Replacement complete. Processed " .. tostring(replaceProcessed)
+              .. "/" .. tostring(replaceTotal) .. "; changed " .. tostring(replaceChanged) .. ".")
+            print("Replacement complete. Changed " .. tostring(replaceChanged) .. " item(s).")
+          else
+            setStatus("No matching IDs found. Check that the old IDs exist in this place.")
+            warn(
+            "Replacement complete with 0 changes. Check the mappings and confirm the old IDs are still in the place.")
+          end
         else
           setStatus("Replacement failed. Check the Output window for details.")
           warn("Replacement failed: " .. tostring(err))

@@ -18,7 +18,8 @@ function ensureLauncherDesktopShortcut({ app, log = () => {} }) {
     const shortcutPath = path.join(desktopDir, 'ISpooferLauncher.lnk');
     const targetPath = process.execPath;
     const workingDirectory = path.dirname(targetPath);
-    const iconPath = targetPath;
+    const packagedIconPath = path.join(process.resourcesPath || workingDirectory, 'app_icon.ico');
+    const iconPath = fs.existsSync(packagedIconPath) ? packagedIconPath : targetPath;
 
     const script = `
 $shortcutPath = ${quotePowerShellString(shortcutPath)}
@@ -31,7 +32,7 @@ $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $targetPath
 $shortcut.WorkingDirectory = $workingDirectory
-$shortcut.IconLocation = $iconPath
+$shortcut.IconLocation = "$iconPath,0"
 $shortcut.Description = 'Launch and update ISpooferMotion'
 $shortcut.Save()
 `;

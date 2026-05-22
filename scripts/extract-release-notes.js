@@ -1,7 +1,5 @@
 'use strict';
 
-// Pulls the matching changelog section for release workflows.
-
 const fs = require('fs');
 const path = require('path');
 

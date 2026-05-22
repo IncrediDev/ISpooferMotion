@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.10-hotfix.1
+
+- Kept everything minimal until everything is PROVEN to work
+
 ## v1.3.10
 
 - Fixed ISpooferLauncher showing the default Electron icon.
@@ -14,7 +18,7 @@
 - Fixed animation ID processing that could incorrectly fail with Roblox private-asset errors even when the account/place had access.
 - Improved fallback checks for source assets by retrying Roblox's place-aware asset lookup before falling back to direct downloads.
 - Restored user-account uploads to always use the resolved Roblox user as the upload creator.
-- Made upload preflight stop early with a clear error when the app cannot resolve the Roblox user ID.
+- Made upload setup stop early with a clear error when the app cannot resolve the Roblox user ID.
 
 ## v1.3.0
 

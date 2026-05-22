@@ -1,43 +1,69 @@
+#!/usr/bin/env node
 'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-function findPattern(pattern) {
-  const normalized = pattern.replace(/\\/g, '/');
-  const starIndex = normalized.indexOf('*');
+const cwd = process.cwd();
 
-  if (starIndex === -1) {
-    const resolved = path.resolve(process.cwd(), pattern);
-    return fs.existsSync(resolved) ? [resolved] : [];
+function normalizeSlash(value) {
+  return value.replace(/\\/g, '/');
+}
+
+function expandPattern(pattern) {
+  const normalized = normalizeSlash(pattern);
+  if (!normalized.includes('*')) return [path.resolve(cwd, pattern)];
+
+  const parts = normalized.split('/');
+  const starIndex = parts.findIndex((part) => part.includes('*'));
+  const base = path.resolve(cwd, ...parts.slice(0, starIndex));
+  const rest = parts.slice(starIndex);
+  const matches = [];
+
+  function walk(directory, remaining) {
+    if (!remaining.length) {
+      matches.push(directory);
+      return;
+    }
+
+    const [segment, ...next] = remaining;
+    if (!fs.existsSync(directory)) return;
+
+    const escaped = segment
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*');
+    const matcher = new RegExp(`^${escaped}$`);
+
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!matcher.test(entry.name)) continue;
+      const fullPath = path.join(directory, entry.name);
+      if (next.length && !entry.isDirectory()) continue;
+      walk(fullPath, next);
+    }
   }
 
-  const slashIndex = normalized.lastIndexOf('/', starIndex);
-  const dirPart = slashIndex === -1 ? '.' : normalized.slice(0, slashIndex);
-  const filePattern = normalized.slice(slashIndex + 1);
-  const [prefix, suffix] = filePattern.split('*');
-  const dir = path.resolve(process.cwd(), dirPart);
-
-  if (!fs.existsSync(dir)) return [];
-
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter(
-      (entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(suffix),
-    )
-    .map((entry) => path.join(dir, entry.name));
+  walk(base, rest);
+  return matches;
 }
 
-const patterns = process.argv.slice(2);
-const files = [...new Set(patterns.flatMap(findPattern))].sort();
+const files = process.argv.slice(2).flatMap(expandPattern).filter((file) => {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+});
 
-if (files.length === 0) {
-  console.log('No private test files found; skipping.');
-  process.exit(0);
+if (!files.length) {
+  console.error('No test files matched.');
+  process.exit(1);
 }
 
-const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, ['--test', ...files], {
+  cwd,
+  stdio: 'inherit',
+  shell: false,
+});
 
-if (result.error) throw result.error;
-process.exit(result.status ?? 1);
+process.exit(result.status || 0);

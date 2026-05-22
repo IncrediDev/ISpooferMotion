@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Cleanup helper for local generated files. It should delete outputs.
 'use strict';
 
 const fs = require('fs');
@@ -31,7 +30,6 @@ run('taskkill', ['/F', '/IM', 'electron.exe', '/T']);
 
 [
   'dist',
-  'build',
   'out',
   'plugin-build',
   'dist-plugin',

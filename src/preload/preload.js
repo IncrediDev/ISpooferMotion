@@ -1,40 +1,140 @@
+'use strict';
+
 const { contextBridge, ipcRenderer } = require('electron');
 
-const send = (channel, ...args) => ipcRenderer.send(channel, ...args);
-const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
-const on = (channel, listener) => {
-  if (typeof listener !== 'function') return () => {};
-  const wrapped = (_event, payload) => listener(payload);
-  ipcRenderer.on(channel, wrapped);
-  return () => ipcRenderer.removeListener(channel, wrapped);
-};
+const NOOP = () => {};
 
-contextBridge.exposeInMainWorld('electronAPI', {
+const SEND_CHANNELS = new Set([
+  'window-minimize',
+  'window-close',
+  'open-external',
+  'run-spoofer-action',
+  'spoofer-pause',
+  'spoofer-resume',
+  'spoofer-cancel',
+  'clear-session',
+]);
+
+const INVOKE_CHANNELS = new Set([
+  'get-app-version',
+  'get-release-source',
+  'get-runtime-info',
+  'load-renderer-settings',
+  'save-renderer-settings',
+  'load-profile-secrets',
+  'save-profile-secrets',
+  'clear-profile-secrets',
+  'get-roblox-profile',
+  'fetch-audio-quota',
+  'select-folder',
+  'open-logs-folder',
+  'open-plugins-folder',
+  'copy-debug-info',
+  'export-support-report',
+  'clear-asset-history',
+  'check-session',
+]);
+
+const SUBSCRIBE_CHANNELS = new Set(['update-status-message', 'spoofer-result', 'transfer-update']);
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asRecord(value) {
+  return isRecord(value) ? value : {};
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function sanitizeExternalUrl(value) {
+  if (typeof value !== 'string') return null;
+
+  const rawUrl = value.trim();
+  if (!rawUrl || rawUrl.length > 2048) return null;
+
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function send(channel, ...args) {
+  if (!SEND_CHANNELS.has(channel)) {
+    throw new Error(`Blocked IPC send channel: ${channel}`);
+  }
+
+  ipcRenderer.send(channel, ...args);
+}
+
+function invoke(channel, ...args) {
+  if (!INVOKE_CHANNELS.has(channel)) {
+    return Promise.reject(new Error(`Blocked IPC invoke channel: ${channel}`));
+  }
+
+  return ipcRenderer.invoke(channel, ...args);
+}
+
+function subscribe(channel, callback) {
+  if (!SUBSCRIBE_CHANNELS.has(channel) || typeof callback !== 'function') return NOOP;
+
+  const listener = (_event, payload) => callback(payload);
+  ipcRenderer.on(channel, listener);
+
+  return () => {
+    ipcRenderer.removeListener(channel, listener);
+  };
+}
+
+const electronAPI = Object.freeze({
   minimize: () => send('window-minimize'),
   close: () => send('window-close'),
-  openExternal: (url) => invoke('open-external', url),
-  getRuntimeInfo: () => invoke('get-runtime-info'),
+
+  onStatusUpdate: (callback) => subscribe('update-status-message', callback),
+  onStatusMessage: (callback) => subscribe('update-status-message', callback),
+  onSpooferResult: (callback) => subscribe('spoofer-result', callback),
+  onTransferUpdate: (callback) => subscribe('transfer-update', callback),
+
   getAppVersion: () => invoke('get-app-version'),
   getReleaseSource: () => invoke('get-release-source'),
-  loadProfileSecrets: (profileIds) => invoke('load-profile-secrets', profileIds || []),
-  saveProfileSecrets: (data) => invoke('save-profile-secrets', data || {}),
+  getRuntimeInfo: () => invoke('get-runtime-info'),
+
+  openExternal: (url) => {
+    const safeUrl = sanitizeExternalUrl(url);
+    if (!safeUrl) return false;
+    send('open-external', safeUrl);
+    return true;
+  },
+
+  loadRendererSettings: () => invoke('load-renderer-settings'),
+  saveRendererSettings: (settings) => invoke('save-renderer-settings', asRecord(settings)),
+  loadProfileSecrets: (profileIds) => invoke('load-profile-secrets', asArray(profileIds)),
+  saveProfileSecrets: (data) => invoke('save-profile-secrets', asRecord(data)),
   clearProfileSecrets: (profileId) => invoke('clear-profile-secrets', profileId),
-  getRobloxProfile: (context) => invoke('get-roblox-profile', context || {}),
+  getRobloxProfile: (context) => invoke('get-roblox-profile', asRecord(context)),
+
+  runSpooferAction: (data) => send('run-spoofer-action', asRecord(data)),
   pauseSpoofer: () => send('spoofer-pause'),
   resumeSpoofer: () => send('spoofer-resume'),
   cancelSpoofer: () => send('spoofer-cancel'),
-  runSpooferAction: (payload) => send('run-spoofer-action', payload || {}),
-  checkSession: () => invoke('check-session'),
+  resumeSession: (data) => send('run-spoofer-action', { ...asRecord(data), resumeSession: true }),
+
+  fetchAudioQuota: (cookie, autoDetect) =>
+    invoke('fetch-audio-quota', { cookie, autoDetect: Boolean(autoDetect) }),
+  getAudioQuota: (context) => invoke('fetch-audio-quota', asRecord(context)),
+  selectFolder: () => invoke('select-folder'),
   openLogsFolder: () => invoke('open-logs-folder'),
   openPluginsFolder: () => invoke('open-plugins-folder'),
-  copyDebugInfo: (context) => invoke('copy-debug-info', context || {}),
-  exportSupportReport: (context) => invoke('export-support-report', context || {}),
-  clearSession: () => invoke('clear-app-history'),
+  copyDebugInfo: (context) => invoke('copy-debug-info', asRecord(context)),
+  exportSupportReport: (context) => invoke('export-support-report', asRecord(context)),
   clearCache: () => invoke('clear-asset-history'),
-  selectFolder: () => invoke('select-folder'),
-  getAudioQuota: (context) => invoke('fetch-audio-quota', context || {}),
-  onStatusMessage: (listener) => on('update-status-message', listener),
-  onTransferUpdate: (listener) => on('transfer-update', listener),
-  onSpooferResult: (listener) => on('spoofer-result', listener),
-  onAppNotification: (listener) => on('app-notification', listener),
+
+  checkSession: () => invoke('check-session'),
+  clearSession: () => send('clear-session'),
 });
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);

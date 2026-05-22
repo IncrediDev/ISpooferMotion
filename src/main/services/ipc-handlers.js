@@ -1,20 +1,19 @@
-const path = require('path');
-const { ipcMain, app, dialog, clipboard } = require('electron');
-const crypto = require('crypto');
-const keytar = require('keytar');
+'use strict';
+
+const path = require('node:path');
+const crypto = require('node:crypto');
+const fs = require('node:fs/promises');
+const { app, dialog, ipcMain, shell } = require('electron');
 const {
   DEVELOPER_MODE,
   buildRobloxCookieHeader,
   clearDownloadsDirectory,
   retryAsync,
   sanitizeFilename,
-  sanitizeLogMessage,
-  getCurrentLogFilePath,
-  getLatestLogFilePath,
-  readTextFileTail,
 } = require('./common');
 const {
   getCookieFromRobloxStudio,
+  getCsrfToken,
   getPlaceIdFromCreator,
   getAuthenticatedUserId,
 } = require('./roblox-api');
@@ -22,871 +21,184 @@ const {
   downloadAnimationAssetWithProgress,
   publishAnimationRbxmWithProgress,
 } = require('./transfer-handlers');
-const { runQueue } = require('../../core/queue');
-const { readTextWithTimeout } = require('../../core/downloads');
-const { animationGrabberTask } = require('../../features/animation-grabber/task');
-const { soundGrabberTask } = require('../../features/sound-grabber/task');
-const {
-  applyDefaultCreator,
-  formatRejectedLines,
-  parseAssetInput,
-  parseAssetTypeDirective,
-} = require('../../core/assets');
-const {
-  formatAssetEntry,
-  getFreshCachedLocation,
-  loadAssetResolutionCache: loadAssetResolutionCacheFromPath,
-  orderPlaceIdsWithCache,
-  rememberBadPlaceId,
-  rememberCachedLocation,
-  rememberGoodPlaceId,
-  saveAssetResolutionCache: saveAssetResolutionCacheToPath,
-} = require('../../core/assets');
-const {
-  buildBatchItems,
-  chunkArray,
-  createBatchLocationFailure,
-  createStageFailure,
-  createStageSuccess,
-  getBatchPlan,
-  getLocationErrorText,
-  groupBatchItemsByCreator,
-  summarizeStageFailures,
-  classifyAssetError,
-  retryDelayWithJitter,
-  toPositiveInteger,
-} = require('./asset-pipeline');
-const fs = require('fs').promises;
-const {
-  buildAppDebugInfo,
-  buildSupportReport,
-  formatSupportReportText,
-} = require('../../core/reports');
-const { createBufferedSessionSaver, createSessionStore } = require('../../core/session');
-const {
-  assetHistoryToRows,
-  buildHistoryKey,
-  clearAssetHistory: clearAssetHistoryFromPath,
-  readAssetHistory,
-  rememberAssetMappingInObject,
-  writeAssetHistory,
-} = require('../../core/assets/history');
-let _isPaused = false;
-let _isCancelled = false;
-let _pauseResolvers = [];
-let _runAbortController = null;
+
+// Pause / Resume
+let isPaused = false;
+let isCancelled = false;
+const pauseResolvers = new Set();
+
 function pauseSpoofer() {
-  _isPaused = true;
+  isPaused = true;
 }
+
 function resumeSpoofer() {
-  _isPaused = false;
-  _pauseResolvers.splice(0).forEach((r) => r());
+  isPaused = false;
+  for (const resolve of pauseResolvers) resolve();
+  pauseResolvers.clear();
 }
+
 function cancelSpoofer() {
-  _isCancelled = true;
-  if (_runAbortController) _runAbortController.abort();
+  isCancelled = true;
   resumeSpoofer();
 }
+
 function resetRunControls() {
-  _isPaused = false;
-  _isCancelled = false;
-  _runAbortController = null;
-  _pauseResolvers.splice(0).forEach((r) => r());
+  isCancelled = false;
+  resumeSpoofer();
 }
-function beginRunControls() {
-  resetRunControls();
-  _runAbortController = new AbortController();
-  return _runAbortController.signal;
-}
-async function checkPaused() {
-  if (_isPaused) await new Promise((resolve) => _pauseResolvers.push(resolve));
-}
+
 function checkCancelled() {
-  if (_isCancelled) {
-    const err = new Error('Run canceled by user.');
-    err.code = 'SPOOFER_CANCELLED';
-    throw err;
+  if (isCancelled) {
+    throw new Error('Operation cancelled');
   }
 }
-function isCancelError(err) {
-  return (
-    err &&
-    (err.code === 'SPOOFER_CANCELLED' ||
-      err.code === 'QUEUE_CANCELLED' ||
-      err.code === 'ABORT_ERR' ||
-      err.name === 'QueueCancelledError')
-  );
-}
 
-const DEFAULT_PLACE_ID_CANDIDATES = Object.freeze([99840799534728]);
-const PROFILE_SECRET_SERVICE = 'ISpooferMotion Profiles';
-const PROFILE_SECRET_NAMES = Object.freeze(['apiKey', 'robloxCookie']);
-
-function normalizeProfileSecretId(profileId) {
-  const value = String(profileId || '').trim();
-  if (!/^[a-z0-9_-]{1,80}$/i.test(value)) throw new Error('Invalid profile id.');
-  return value;
-}
-
-function getProfileSecretAccount(profileId, secretName) {
-  return `${normalizeProfileSecretId(profileId)}:${secretName}`;
-}
-
-async function readProfileSecrets(profileId) {
-  const id = normalizeProfileSecretId(profileId);
-  const entries = await Promise.all(
-    PROFILE_SECRET_NAMES.map(async (name) => [
-      name,
-      (await keytar.getPassword(PROFILE_SECRET_SERVICE, getProfileSecretAccount(id, name))) || '',
-    ]),
-  );
-  return Object.fromEntries(entries);
-}
-
-async function writeProfileSecrets(profileId, secrets = {}) {
-  const id = normalizeProfileSecretId(profileId);
-  for (const name of PROFILE_SECRET_NAMES) {
-    if (!Object.prototype.hasOwnProperty.call(secrets, name)) continue;
-    const value = String(secrets[name] || '').trim();
-    const account = getProfileSecretAccount(id, name);
-    if (value) await keytar.setPassword(PROFILE_SECRET_SERVICE, account, value);
-    else await keytar.deletePassword(PROFILE_SECRET_SERVICE, account);
-  }
-  return readProfileSecrets(id);
-}
-
-async function deleteProfileSecrets(profileId) {
-  const id = normalizeProfileSecretId(profileId);
-  await Promise.all(
-    PROFILE_SECRET_NAMES.map((name) =>
-      keytar.deletePassword(PROFILE_SECRET_SERVICE, getProfileSecretAccount(id, name)),
-    ),
-  );
-  return { apiKey: '', robloxCookie: '' };
-}
-
-function normalizeCreatorKey(creatorType, creatorId) {
-  return `${creatorType || 'user'}:${creatorId ? String(creatorId) : ''}`;
-}
-
-function normalizePlaceIdCandidates(placeIds, options = {}) {
-  const includeDefaults = options.includeDefaults !== false;
-  const raw = Array.isArray(placeIds) ? placeIds : placeIds ? [placeIds] : [];
-  const values = includeDefaults ? [...raw, ...DEFAULT_PLACE_ID_CANDIDATES] : raw;
-  const seen = new Set();
-  const normalized = [];
-  for (const value of values) {
-    const id = String(value || '').trim();
-    if (!/^\d+$/.test(id) || seen.has(id)) continue;
-    seen.add(id);
-    normalized.push(id);
-  }
-  return normalized.length > 0 ? normalized : DEFAULT_PLACE_ID_CANDIDATES.map(String);
-}
-
-async function waitForRunDelay(ms, stepMs = 250) {
-  const endAt = Date.now() + Math.max(0, Number(ms) || 0);
-  while (Date.now() < endAt) {
-    checkCancelled();
-    await checkPaused();
-    checkCancelled();
-    await delay(Math.min(Math.max(1, stepMs), endAt - Date.now()));
-  }
+async function checkPaused() {
+  checkCancelled();
+  if (!isPaused) return;
+  await new Promise((resolve) => pauseResolvers.add(resolve));
   checkCancelled();
 }
+
+// Session (crash recovery)
 function getSessionPath() {
   return path.join(app.getPath('userData'), 'ispoofer_session.json');
 }
-function getSessionStore() {
-  return createSessionStore({
-    fs,
-    sessionPath: getSessionPath(),
-    onError: (err, action) => {
-      if (DEVELOPER_MODE) console.warn(`(Dev) Failed to ${action} session:`, err.message);
-    },
-  });
-}
+
 async function saveSession(session) {
-  await getSessionStore().save(session);
+  try {
+    await fs.writeFile(getSessionPath(), JSON.stringify(session, null, 2), 'utf8');
+  } catch (err) {
+    if (DEVELOPER_MODE) console.warn('(Dev) Failed to save session:', err);
+  }
 }
+
 async function loadSession() {
-  return getSessionStore().load();
+  try {
+    return JSON.parse(await fs.readFile(getSessionPath(), 'utf8'));
+  } catch {
+    return null;
+  }
 }
+
 async function clearSession() {
-  await getSessionStore().clear();
-}
-function getAssetHistoryPath() {
-  return path.join(app.getPath('userData'), 'ispoofer_asset_history.json');
-}
-async function loadAssetHistory() {
-  return readAssetHistory(fs, getAssetHistoryPath());
-}
-async function saveAssetHistory(history) {
-  return writeAssetHistory(fs, getAssetHistoryPath(), history, (err) => {
-    if (DEVELOPER_MODE) console.warn('(Dev) Failed to save asset history:', err.message);
-  });
-}
-async function clearAssetHistory() {
-  return clearAssetHistoryFromPath(fs, getAssetHistoryPath());
-}
-function getAssetResolutionCachePath() {
-  return path.join(app.getPath('userData'), 'ispoofer_asset_resolution_cache.json');
+  await fs.rm(getSessionPath(), { force: true }).catch(() => {});
 }
 
-async function loadAssetResolutionCache() {
-  return loadAssetResolutionCacheFromPath(getAssetResolutionCachePath());
+function normalizePayload(value) {
+  return value && typeof value === 'object' ? value : {};
 }
 
-async function saveAssetResolutionCache(cache) {
-  return saveAssetResolutionCacheToPath(getAssetResolutionCachePath(), cache, {
-    onError: (err) => {
-      if (DEVELOPER_MODE) console.warn('(Dev) Failed to save asset resolution cache:', err.message);
-    },
-  });
-}
-
-function createCompletedDownloadResult(entry, completed) {
-  return createStageSuccess(entry, 'download', {
-    filePath: completed.filePath,
-    cached: true,
-    resumed: true,
-    error: '',
-  });
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
-}
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = 15000, label = 'request') {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+function canOpenExternalUrl(value) {
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } catch (err) {
-    if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')) {
-      throw new Error(`${label} timed out after ${Math.max(1000, timeoutMs)}ms`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
+    const url = new URL(String(value));
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
   }
 }
 
-async function readJsonWithTimeout(response, timeoutMs = 10000, label = 'response') {
-  let timeout;
-  try {
-    return await Promise.race([
-      response.json(),
-      new Promise((_, reject) => {
-        timeout = setTimeout(
-          () =>
-            reject(new Error(`${label} JSON read timed out after ${Math.max(1000, timeoutMs)}ms`)),
-          Math.max(1000, timeoutMs),
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function fetchRobloxAvatarDataUrl(userId) {
-  const thumbResponse = await fetchWithTimeout(
-    `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${encodeURIComponent(userId)}&size=100x100&format=Png&isCircular=false`,
-    { headers: { 'User-Agent': 'ISpooferMotion' } },
-    10000,
-    'Roblox avatar thumbnail request',
-  );
-  if (!thumbResponse.ok) return '';
-  const thumbData = await readJsonWithTimeout(
-    thumbResponse,
-    8000,
-    'Roblox avatar thumbnail response',
-  );
-  const imageUrl = thumbData && thumbData.data && thumbData.data[0] && thumbData.data[0].imageUrl;
-  if (!imageUrl) return '';
-
-  const imageResponse = await fetchWithTimeout(
-    imageUrl,
-    { headers: { 'User-Agent': 'ISpooferMotion' } },
-    12000,
-    'Roblox avatar image request',
-  );
-  if (!imageResponse.ok) return '';
-  const contentType = imageResponse.headers.get('content-type') || 'image/png';
-  const bytes = Buffer.from(await imageResponse.arrayBuffer());
-  if (!bytes.length) return '';
-  return `data:${contentType};base64,${bytes.toString('base64')}`;
-}
-
-async function fetchRobloxImageDataUrl(imageUrl, label = 'Roblox image request') {
-  if (!imageUrl) return '';
-  const imageResponse = await fetchWithTimeout(
-    imageUrl,
-    { headers: { 'User-Agent': 'ISpooferMotion' } },
-    12000,
-    label,
-  );
-  if (!imageResponse.ok) return '';
-  const contentType = imageResponse.headers.get('content-type') || 'image/png';
-  const bytes = Buffer.from(await imageResponse.arrayBuffer());
-  if (!bytes.length) return '';
-  return `data:${contentType};base64,${bytes.toString('base64')}`;
-}
-
-async function fetchRobloxGroupDetails(groupId) {
-  const cleanGroupId = String(groupId || '').replace(/\D/g, '');
-  if (!cleanGroupId) return { name: '', iconDataUrl: '' };
-
-  const [details, iconDataUrl] = await Promise.all([
-    fetchWithTimeout(
-      `https://groups.roblox.com/v1/groups/${encodeURIComponent(cleanGroupId)}`,
-      { headers: { 'User-Agent': 'ISpooferMotion' } },
-      10000,
-      'Roblox group details request',
-    )
-      .then(async (response) => {
-        if (!response.ok) return {};
-        return await readJsonWithTimeout(response, 8000, 'Roblox group details response');
-      })
-      .catch(() => ({})),
-    fetchWithTimeout(
-      `https://thumbnails.roblox.com/v1/groups/icons?groupIds=${encodeURIComponent(cleanGroupId)}&size=150x150&format=Png&isCircular=false`,
-      { headers: { 'User-Agent': 'ISpooferMotion' } },
-      10000,
-      'Roblox group icon request',
-    )
-      .then(async (response) => {
-        if (!response.ok) return '';
-        const thumbData = await readJsonWithTimeout(response, 8000, 'Roblox group icon response');
-        const imageUrl =
-          thumbData && thumbData.data && thumbData.data[0] && thumbData.data[0].imageUrl;
-        return fetchRobloxImageDataUrl(imageUrl, 'Roblox group icon image request');
-      })
-      .catch(() => ''),
-  ]);
-
-  return {
-    name: details && details.name ? String(details.name) : '',
-    iconDataUrl,
-  };
-}
-
-async function getRobloxProfileForRenderer(data = {}) {
-  let cookie = data.cookie || '';
-  if (!cookie && data.autoDetect) {
-    cookie = await getCookieFromRobloxStudio();
-  }
-
-  const cookieHeader = buildRobloxCookieHeader(cookie);
-  if (!cookieHeader) {
-    return { ok: false, username: 'Not connected', displayName: '', userId: '', avatarDataUrl: '' };
-  }
-
-  const response = await fetchWithTimeout(
-    'https://users.roblox.com/v1/users/authenticated',
-    { headers: { Cookie: cookieHeader, 'User-Agent': 'RobloxStudio/WinInet' } },
-    10000,
-    'Roblox profile request',
-  );
-
-  if (!response.ok) {
-    return { ok: false, username: 'Not connected', displayName: '', userId: '', avatarDataUrl: '' };
-  }
-
-  const profile = await readJsonWithTimeout(response, 8000, 'Roblox profile response');
-  const userId = profile && profile.id ? String(profile.id) : '';
-  const [avatarDataUrl, groupDetails] = await Promise.all([
-    userId ? fetchRobloxAvatarDataUrl(userId).catch(() => '') : '',
-    data.groupId
-      ? fetchRobloxGroupDetails(data.groupId).catch(() => ({ name: '', iconDataUrl: '' }))
-      : { name: '', iconDataUrl: '' },
-  ]);
-  return {
-    ok: Boolean(userId),
-    username: profile && profile.name ? String(profile.name) : 'Roblox user',
-    displayName: profile && profile.displayName ? String(profile.displayName) : '',
-    userId,
-    avatarDataUrl,
-    groupName: groupDetails.name || '',
-    groupIconDataUrl: groupDetails.iconDataUrl || '',
-  };
-}
-
-async function ensureWritableFolder(folderPath) {
-  if (!folderPath || !String(folderPath).trim()) {
-    throw new Error('No folder path provided.');
-  }
-  const resolved = String(folderPath).trim();
-  await fs.mkdir(resolved, { recursive: true });
-  const testFile = path.join(
-    resolved,
-    `.ispoofer-write-test-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
-  );
-  await fs.writeFile(testFile, 'test');
-  await fs.unlink(testFile).catch(() => {});
-  return resolved;
-}
-
-function formatPreflightResult(issues, warnings) {
-  const issueLines = (issues || []).map((issue) => `• ${issue}`);
-  const warningLines = (warnings || []).map((warning) => `• ${warning}`);
-  const sections = [];
-  if (issueLines.length) {
-    sections.push(`Preflight failed. Fix these before running:
-${issueLines.join('\n')}`);
-  }
-  if (warningLines.length) {
-    sections.push(`Preflight warnings. You can continue, but these may cause failures:
-${warningLines.join('\n')}`);
-  }
-  if (!sections.length) return 'Preflight complete. Ready to run.';
-  const nextStep = issueLines.length
-    ? 'Next step: fix the items above, then run again.'
-    : 'Tip: if this is a large batch, lower concurrency if Roblox starts rate-limiting requests.';
-  return `${sections.join('\n\n')}\n\n${nextStep}`;
-}
-
-function getAudioQuotaRemaining(quotaData) {
-  if (!quotaData || typeof quotaData !== 'object') return null;
-  if (Array.isArray(quotaData.quotas)) {
-    const monthQuota =
-      quotaData.quotas.find((q) => String(q.duration || '').toLowerCase() === 'month') ||
-      quotaData.quotas[0];
-    if (
-      monthQuota &&
-      Number.isFinite(Number(monthQuota.capacity)) &&
-      Number.isFinite(Number(monthQuota.usage))
-    ) {
-      return Math.max(0, Number(monthQuota.capacity) - Number(monthQuota.usage));
-    }
-  }
-  if (quotaData.usage && Number.isFinite(Number(quotaData.usage.remainingQuota))) {
-    return Number(quotaData.usage.remainingQuota);
-  }
-  return null;
-}
-
-async function fetchAudioQuotaForPreflight(robloxCookie) {
-  const cookieHeader = buildRobloxCookieHeader(robloxCookie);
-  if (!cookieHeader) throw new Error('Missing or invalid ROBLOSECURITY cookie');
-  const response = await fetchWithTimeout(
-    'https://publish.roblox.com/v1/asset-quotas?resourceType=RateLimitUpload&assetType=Audio',
-    {
-      headers: {
-        Cookie: cookieHeader,
-        'User-Agent': 'RobloxStudio/WinInet',
-      },
-    },
-    10000,
-    'Audio quota check',
-  );
-  if (!response.ok) {
-    throw new Error(`Audio quota check failed (${response.status})`);
-  }
-  return await readJsonWithTimeout(response, 10000, 'Audio quota response');
-}
-
-async function runBasicPreflightChecks({
-  data,
-  assetEntries,
-  isSoundMode,
-  downloadsDir,
-  robloxCookie,
-}) {
-  const issues = [];
-  const warnings = [];
-  let authenticatedUserId = null;
-
-  if (!assetEntries || assetEntries.length === 0) {
-    issues.push(`No valid ${isSoundMode ? 'sound' : 'animation'} entries were found.`);
-  }
-
-  if (!data.downloadOnly && !data.enableSpoofing) {
-    issues.push(
-      'Enable Spoofing is off and Download-Only mode is also off. Pick at least one mode.',
-    );
-  }
-
-  if (data.downloadOnly && (!data.downloadFolder || !String(data.downloadFolder).trim())) {
-    issues.push('Download-Only mode needs a download folder.');
-  }
-
-  if (!data.downloadOnly && !data.apiKey) {
-    issues.push('Uploads need an Open Cloud API key.');
-  } else if (!data.downloadOnly) {
-    const apiKey = String(data.apiKey || '').trim();
-    if (apiKey.length < 20 || /\s/.test(apiKey)) {
-      issues.push(
-        'Open Cloud API key looks invalid. Paste the full key with no spaces or line breaks.',
-      );
-    }
-  }
-
-  if (data.groupId && !/^\d+$/.test(String(data.groupId).trim())) {
-    issues.push('Group ID must be numbers only.');
-  }
-
-  if (data.overridePlaceId && !/^\d+$/.test(String(data.overridePlaceId).trim())) {
-    issues.push('Override Place ID must be numbers only.');
-  }
-
-  try {
-    await ensureWritableFolder(downloadsDir);
-  } catch (err) {
-    issues.push(`Output/download folder is not writable: ${err.message}`);
-  }
-
-  try {
-    authenticatedUserId = await getAuthenticatedUserId(robloxCookie);
-  } catch (err) {
-    const classified = classifyError(err, { stage: 'preflight' });
-    if (classified.category === 'bad_cookie') {
-      issues.push(`Cookie check failed: ${classified.message}`);
-    } else {
-      warnings.push(
-        `Cookie could not be fully verified before the run: ${classified.message}. The run will still try asset access and report per-item failures.`,
-      );
-    }
-  }
-
-  if (!data.downloadOnly && isSoundMode && robloxCookie) {
+function resetIpcChannel(channel, mode = 'listener') {
+  if (mode === 'handler') {
     try {
-      const quotaData = await fetchAudioQuotaForPreflight(robloxCookie);
-      const remaining = getAudioQuotaRemaining(quotaData);
-      if (remaining !== null && assetEntries.length > remaining) {
-        warnings.push(
-          `Audio quota may be too low for this run. Remaining: ${remaining}, requested: ${assetEntries.length}. The run will continue and report upload failures per item if Roblox blocks them.`,
-        );
-      } else if (remaining !== null && remaining - assetEntries.length <= 5) {
-        warnings.push(
-          `Audio quota will be almost empty after this run. Remaining after run: ${Math.max(0, remaining - assetEntries.length)}.`,
-        );
-      }
-    } catch (err) {
-      warnings.push(
-        `Audio quota could not be checked before the run: ${classifyError(err, { stage: 'preflight' }).message}`,
-      );
-    }
+      ipcMain.removeHandler(channel);
+    } catch {}
+    return;
   }
-
-  if (assetEntries && assetEntries.length > 100) {
-    warnings.push(
-      `Large batch detected (${assetEntries.length} items). If Roblox rate-limits you, lower download/upload concurrency and use Retry Failed Only after the run.`,
-    );
-  }
-
-  return { ok: issues.length === 0, issues, warnings, authenticatedUserId };
+  ipcMain.removeAllListeners(channel);
 }
 
-function extractBatchLocationError(loc) {
-  return getLocationErrorText(loc);
+function onIpc(channel, listener) {
+  resetIpcChannel(channel);
+  ipcMain.on(channel, listener);
 }
 
-async function runAssetAccessPreflightChecks({
-  batchItems,
-  placeIdMap,
-  robloxCookieHeader,
-  assetTypeName,
-  timeoutMs,
-}) {
-  const issues = [];
-  const warnings = [];
-  const sampleItems = (batchItems || []).slice(0, Math.min(5, (batchItems || []).length));
-  if (sampleItems.length === 0) return { ok: true, issues, warnings };
+function handleIpc(channel, handler) {
+  resetIpcChannel(channel, 'handler');
+  ipcMain.handle(channel, handler);
+}
 
-  let accessibleCount = 0;
-  const failures = [];
+function getReleaseSourceLabel() {
+  const owner = 'IncrediDev';
+  const repo = 'ISpooferMotion';
+  return `${owner}/${repo}`;
+}
 
-  for (const item of sampleItems) {
-    const creatorKey = normalizeCreatorKey(item.creatorType, item.creatorId);
-    const placeIds = placeIdMap[creatorKey] || DEFAULT_PLACE_ID_CANDIDATES;
-    const placeIdArray = normalizePlaceIdCandidates(placeIds);
-    const itemWithoutCreator = (({ creatorType, creatorId, ...rest }) => rest)(item);
-    let itemAccessible = false;
-    let lastError = '';
-
-    for (const placeId of placeIdArray.slice(0, 8)) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), Math.max(5000, timeoutMs || 10000));
-      try {
-        const resp = await fetchWithTimeout(
-          'https://assetdelivery.roblox.com/v2/assets/batch',
-          {
-            method: 'POST',
-            headers: {
-              'User-Agent': 'RobloxStudio/WinInet',
-              'Content-Type': 'application/json',
-              Accept: '*/*',
-              'Accept-Encoding': 'gzip, deflate',
-              Cookie: robloxCookieHeader,
-              'Roblox-Place-Id': String(placeId),
-            },
-            body: JSON.stringify([itemWithoutCreator]),
-            signal: controller.signal,
-          },
-          Math.max(5000, timeoutMs || 10000),
-          'Asset access preflight',
-        );
-        if (!resp.ok) {
-          lastError = `HTTP ${resp.status}`;
-          continue;
-        }
-        const body = await readJsonWithTimeout(resp, 8000, 'Asset access preflight response');
-        const loc = body && body[0];
-        if (loc && loc.locations && loc.locations.length > 0 && loc.locations[0].location) {
-          itemAccessible = true;
-          break;
-        }
-        lastError = extractBatchLocationError(loc);
-      } catch (err) {
-        lastError =
-          err && err.name === 'AbortError'
-            ? 'Timed out while checking asset access'
-            : err.message || String(err);
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-
-    if (itemAccessible) accessibleCount++;
-    else failures.push({ id: item.requestId, error: lastError || 'Asset access check failed' });
-  }
-
-  if (accessibleCount === 0 && failures.length > 0) {
-    const classified = classifyError(failures[0].error);
-    warnings.push(
-      `${sampleItems.length}/${sampleItems.length} sampled ${assetTypeName.toLowerCase()} assets failed the quick access check. The run will continue and try all discovered creator place IDs plus direct asset fallbacks. Last check: ${classified.message}`,
-    );
-  } else if (failures.length > 0) {
-    warnings.push(
-      `${failures.length}/${sampleItems.length} sampled ${assetTypeName.toLowerCase()} assets failed the access check. The run can continue, but some items may fail.`,
-    );
-  }
-
+function getRuntimeInfo() {
   return {
-    ok: true,
-    issues,
-    warnings,
-    accessibleCount,
-    checked: sampleItems.length,
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
   };
 }
 
-function classifyError(error, context = {}) {
-  return classifyAssetError(error, context);
-}
-
-async function cooldownWithCountdown(ms, label, onTick, waitForDelay = delay) {
-  const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
-  for (let remaining = totalSeconds; remaining > 0; remaining--) {
-    if (onTick) onTick(remaining, totalSeconds);
-    await waitForDelay(Math.min(1000, Math.max(1, ms || 0)));
+async function readJsonFile(filePath, fallback) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch {
+    return fallback;
   }
 }
 
-async function retryWithCooldown(
-  fn,
-  retries,
-  delayMs,
-  onAttemptFailure,
-  onCooldownTick,
-  options = {},
-) {
-  let lastError;
-  const attempts = Math.max(1, retries);
-  const stage = options.stage || 'operation';
-  const waitForDelay = typeof options.waitForDelay === 'function' ? options.waitForDelay : delay;
-  const beforeAttempt = typeof options.beforeAttempt === 'function' ? options.beforeAttempt : null;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      if (beforeAttempt) await beforeAttempt(attempt, attempts);
-      return await fn(attempt, attempts);
-    } catch (err) {
-      lastError = err;
-      const classified = classifyError(err, { stage });
-      const retryable =
-        typeof options.shouldRetry === 'function'
-          ? options.shouldRetry(err, classified, attempt, attempts) !== false
-          : classified.retryable === true;
-      if (onAttemptFailure) onAttemptFailure(attempt, attempts, err, classified, retryable);
-      if (!retryable || attempt >= attempts) break;
-      const cooldownMs = retryDelayWithJitter(delayMs, attempt, {
-        maxDelayMs: options.maxDelayMs || 60000,
-      });
-      await cooldownWithCountdown(
-        cooldownMs,
-        `Retry ${attempt + 1}/${attempts}`,
-        (remaining, total) => {
-          if (onCooldownTick)
-            onCooldownTick(remaining, total, attempt + 1, attempts, err, classified);
-        },
-        waitForDelay,
-      );
-    }
-  }
-  const enrichedError = new Error(
-    `After ${attempts} attempt(s): ${lastError && lastError.message ? lastError.message : 'Unknown error'}`,
+async function writeJsonFile(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8');
+}
+
+function getRendererSettingsPath() {
+  return path.join(app.getPath('userData'), 'renderer-settings.json');
+}
+
+function getProfileSecretsPath() {
+  return path.join(app.getPath('userData'), 'profile-secrets.json');
+}
+
+async function loadProfileSecrets(profileIds) {
+  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
+  if (!Array.isArray(profileIds) || profileIds.length === 0) return allSecrets;
+
+  return Object.fromEntries(
+    profileIds.map((profileId) => [String(profileId), allSecrets[String(profileId)] || {}]),
   );
-  enrichedError.cause = lastError;
-  throw enrichedError;
 }
 
-function withTimeout(promiseFactory, timeoutMs, label) {
-  const ms = Math.max(1000, Number(timeoutMs) || 30000);
-  return new Promise((resolve, reject) => {
-    let finished = false;
-    const timer = setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      reject(new Error(`${label || 'Operation'} timed out after ${Math.round(ms / 1000)}s.`));
-    }, ms);
-    Promise.resolve()
-      .then(promiseFactory)
-      .then((value) => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch((err) => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
-}
-
-function dedupeAssetEntries(entries) {
-  const seen = new Set();
-  return (entries || []).filter((entry) => {
-    const key = String(entry.id);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function createStageMetrics() {
-  const startedAt = Date.now();
-  const stages = {};
-  const slowest = {};
-
-  const ensureStage = (stage) => {
-    if (!stages[stage]) {
-      stages[stage] = {
-        count: 0,
-        success: 0,
-        failed: 0,
-        totalDurationMs: 0,
-        totalBytes: 0,
-        averageDurationMs: 0,
-        averageBytesPerSecond: 0,
-      };
-    }
-    return stages[stage];
+async function saveProfileSecrets(data) {
+  const payload = normalizePayload(data);
+  const profileId = String(payload.profileId || 'default');
+  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
+  allSecrets[profileId] = {
+    ...(allSecrets[profileId] || {}),
+    ...normalizePayload(payload.secrets || payload),
   };
-
-  return {
-    mark(stage, result = {}) {
-      const durationMs = Math.max(0, Number(result.durationMs) || 0);
-      const bytes = Math.max(0, Number(result.bytesWritten || result.fileSize || 0));
-      const stats = ensureStage(stage);
-      stats.count += 1;
-      if (result.success === false) stats.failed += 1;
-      else stats.success += 1;
-      stats.totalDurationMs += durationMs;
-      stats.totalBytes += bytes;
-      stats.averageDurationMs =
-        stats.count > 0 ? Math.round(stats.totalDurationMs / stats.count) : 0;
-      stats.averageBytesPerSecond =
-        stats.totalDurationMs > 0
-          ? Math.round((stats.totalBytes / stats.totalDurationMs) * 1000)
-          : 0;
-
-      const name =
-        result.name ||
-        (result.entry && result.entry.name) ||
-        result.id ||
-        (result.entry && result.entry.id) ||
-        '';
-      if (!slowest[stage] || durationMs > slowest[stage].durationMs) {
-        slowest[stage] = { name, durationMs, bytes };
-      }
-    },
-    summary() {
-      return {
-        totalDurationMs: Date.now() - startedAt,
-        stages,
-        slowest,
-      };
-    },
-  };
+  delete allSecrets[profileId].profileId;
+  await writeJsonFile(getProfileSecretsPath(), allSecrets);
+  return true;
 }
 
-function getEtaString(startTimeMs, completed, total) {
-  if (!completed || completed <= 0 || !total || completed >= total) return '';
-  const elapsed = Math.max(0, (Date.now() - startTimeMs) / 1000);
-  const avgTimePerItem = elapsed / completed;
-  const remaining = Math.max(0, total - completed);
-  const etaSeconds = Math.ceil(avgTimePerItem * remaining);
-  const etaMin = Math.floor(etaSeconds / 60);
-  const etaSec = etaSeconds % 60;
-  return ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})`;
+async function clearProfileSecrets(profileId) {
+  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
+  if (profileId) delete allSecrets[String(profileId)];
+  else for (const key of Object.keys(allSecrets)) delete allSecrets[key];
+  await writeJsonFile(getProfileSecretsPath(), allSecrets);
+  return true;
 }
 
-function isHardUploadStopCategory(category) {
-  return [
-    'bad_open_cloud_key',
-    'bad_cookie',
-    'upload_quota',
-    'upload_permission',
-    'permission_denied',
-  ].includes(String(category || ''));
-}
-
-function getDownloadPriority(entry, locationsMap) {
-  const loc = locationsMap && locationsMap[entry.id];
-  if (loc && loc.locations && loc.locations.length > 0 && loc.locations[0].location) return 0;
-  if (loc && loc.errors && loc.errors.length > 0) return 2;
-  return 1;
-}
-
-function getReportDeps() {
-  return {
-    app,
-    fs,
-    sanitizeLogMessage,
-    getCurrentLogFilePath,
-    getLatestLogFilePath,
-    readTextFileTail,
-    developerMode: DEVELOPER_MODE,
-  };
-}
-
+/**
+ * Registers all IPC handlers for main process
+ */
 function registerIpcHandlers(
   getMainWindowFn,
   sendTransferUpdate,
   sendSpooferResultToRenderer,
   sendStatusMessage,
 ) {
-  ipcMain.on('window-minimize', () => {
-    const win = getMainWindowFn && getMainWindowFn();
-    if (win && !win.isDestroyed()) win.minimize();
-  });
+  onIpc('window-minimize', () => getMainWindowFn()?.minimize());
+  onIpc('window-close', () => getMainWindowFn()?.close());
 
-  ipcMain.on('window-close', () => {
-    const win = getMainWindowFn && getMainWindowFn();
-    if (win && !win.isDestroyed()) {
-      win.destroy();
-      return;
-    }
-    app.quit();
-  });
-
-  ipcMain.handle('get-app-version', () => {
+  handleIpc('get-app-version', () => {
     try {
       return app.getVersion();
     } catch (err) {
@@ -895,279 +207,110 @@ function registerIpcHandlers(
     }
   });
 
-  ipcMain.handle('get-runtime-info', () => ({
-    developerMode: DEVELOPER_MODE,
-  }));
-
-  ipcMain.handle('get-roblox-profile', async (_event, data) => {
-    try {
-      return await getRobloxProfileForRenderer(data || {});
-    } catch (err) {
-      if (DEVELOPER_MODE) console.warn('(Dev) Failed to load Roblox profile:', err.message);
-      return {
-        ok: false,
-        username: 'Not connected',
-        displayName: '',
-        userId: '',
-        avatarDataUrl: '',
-      };
-    }
+  handleIpc('get-release-source', () => getReleaseSourceLabel());
+  handleIpc('get-runtime-info', () => getRuntimeInfo());
+  handleIpc('load-renderer-settings', () => readJsonFile(getRendererSettingsPath(), {}));
+  handleIpc('save-renderer-settings', async (_event, settings) => {
+    await writeJsonFile(getRendererSettingsPath(), normalizePayload(settings));
+    return true;
   });
-
-  ipcMain.handle('load-profile-secrets', async (_event, profileIds = []) => {
-    const ids = [...new Set((Array.isArray(profileIds) ? profileIds : []).map(String))];
-    const entries = await Promise.all(
-      ids.map(async (profileId) => {
-        try {
-          return [profileId, await readProfileSecrets(profileId)];
-        } catch (err) {
-          if (DEVELOPER_MODE)
-            console.warn('(Dev) Failed to load profile secrets:', profileId, err.message);
-          return [profileId, { apiKey: '', robloxCookie: '' }];
-        }
-      }),
+  handleIpc('load-profile-secrets', (_event, profileIds) => loadProfileSecrets(profileIds));
+  handleIpc('save-profile-secrets', (_event, data) => saveProfileSecrets(data));
+  handleIpc('clear-profile-secrets', (_event, profileId) => clearProfileSecrets(profileId));
+  handleIpc('get-roblox-profile', () => null);
+  handleIpc('clear-asset-history', async () => true);
+  handleIpc('copy-debug-info', async (_event, context) => {
+    const info = JSON.stringify(
+      { ...getRuntimeInfo(), context: normalizePayload(context) },
+      null,
+      2,
     );
-    return Object.fromEntries(entries);
+    return info;
+  });
+  handleIpc('export-support-report', async (_event, context) => {
+    const reportPath = path.join(app.getPath('userData'), `support-report-${Date.now()}.json`);
+    await writeJsonFile(reportPath, {
+      ...getRuntimeInfo(),
+      context: normalizePayload(context),
+      createdAt: new Date().toISOString(),
+    });
+    return reportPath;
   });
 
-  ipcMain.handle('save-profile-secrets', async (_event, data = {}) => {
-    const profileId = normalizeProfileSecretId(data.profileId);
-    const secrets = {};
-    for (const name of PROFILE_SECRET_NAMES) {
-      if (Object.prototype.hasOwnProperty.call(data, name)) secrets[name] = data[name];
-    }
-    const saved = await writeProfileSecrets(profileId, secrets);
-    return {
-      success: true,
-      hasApiKey: Boolean(saved.apiKey),
-      hasCookie: Boolean(saved.robloxCookie),
-    };
-  });
-
-  ipcMain.handle('clear-profile-secrets', async (_event, profileId) => {
-    await deleteProfileSecrets(profileId);
-    return { success: true, hasApiKey: false, hasCookie: false };
-  });
-
-  ipcMain.handle('get-release-source', async () => {
-    const defaultSource = {
-      id: 'official',
-      label: 'Official',
-      repo: 'IncrediDev/ISpooferMotion',
-    };
-
+  onIpc('open-external', (event, url) => {
     try {
-      const filePath = path.join(app.getPath('userData'), 'release-source.json');
-      const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
-      const sourceId = String(parsed.sourceId || parsed.id || '').toLowerCase();
-
-      if (sourceId === 'fork') {
-        return {
-          id: 'fork',
-          label: 'Testing / Fork',
-          repo: parsed.repo || 'codycon/ISpooferMotion',
-        };
+      if (canOpenExternalUrl(url)) {
+        void shell.openExternal(String(url));
+      } else if (DEVELOPER_MODE) {
+        console.warn('open-external called with invalid url:', url);
       }
-
-      if (sourceId === 'official') {
-        return {
-          id: 'official',
-          label: 'Official',
-          repo: parsed.repo || 'IncrediDev/ISpooferMotion',
-        };
-      }
-
-      return defaultSource;
-    } catch {
-      return defaultSource;
-    }
-  });
-
-  ipcMain.handle('open-external', async (_event, url) => {
-    const { shell } = require('electron');
-
-    const isAllowedExternalHost = (hostname) => {
-      const host = String(hostname || '').toLowerCase();
-      return (
-        host === 'github.com' ||
-        host.endsWith('.github.com') ||
-        host === 'discord.gg' ||
-        host.endsWith('.discord.gg') ||
-        host === 'discord.com' ||
-        host.endsWith('.discord.com') ||
-        host === 'incredidev.com' ||
-        host.endsWith('.incredidev.com') ||
-        host === 'buymeacoffee.com' ||
-        host === 'www.buymeacoffee.com' ||
-        host.endsWith('.buymeacoffee.com') ||
-        host === 'roblox.com' ||
-        host.endsWith('.roblox.com')
-      );
-    };
-
-    try {
-      const parsedUrl = new URL(String(url));
-
-      if (parsedUrl.protocol !== 'https:' || !isAllowedExternalHost(parsedUrl.hostname)) {
-        if (DEVELOPER_MODE) console.warn('Blocked external URL:', url);
-        return { ok: false };
-      }
-
-      await shell.openExternal(parsedUrl.href);
-      return { ok: true };
     } catch (err) {
       if (DEVELOPER_MODE) console.warn('Failed to open external URL:', err);
-      return { ok: false };
     }
   });
 
-  ipcMain.handle('open-logs-folder', async () => {
-    const { shell } = require('electron');
+  handleIpc('open-logs-folder', async () => {
     const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
     try {
       await fs.mkdir(logsDir, { recursive: true });
-      const error = await shell.openPath(logsDir);
-      if (error) throw new Error(error);
-      if (DEVELOPER_MODE) console.log('(Dev) Opened logs folder:', logsDir);
-      return { success: true, path: logsDir };
+      return await shell.openPath(logsDir);
     } catch (err) {
       console.error('Failed to open logs folder:', err);
-      return {
-        success: false,
-        error: err && err.message ? err.message : 'Failed to open logs folder.',
-      };
+      return false;
     }
   });
 
-  ipcMain.handle('open-plugins-folder', async () => {
-    const { shell } = require('electron');
-    const pluginsDir = path.join(
-      process.env.LOCALAPPDATA || app.getPath('appData'),
-      'Roblox',
-      'Plugins',
-    );
+  handleIpc('open-plugins-folder', async () => {
+    const pluginDir = path.join(app.getPath('userData'), 'plugins');
     try {
-      await fs.mkdir(pluginsDir, { recursive: true });
-      const error = await shell.openPath(pluginsDir);
-      if (error) throw new Error(error);
-      if (DEVELOPER_MODE) console.log('(Dev) Opened Roblox plugins folder:', pluginsDir);
-      return { success: true, path: pluginsDir };
+      await fs.mkdir(pluginDir, { recursive: true });
+      return await shell.openPath(pluginDir);
     } catch (err) {
-      console.error('Failed to open Roblox plugins folder:', err);
-      return {
-        success: false,
-        error: err && err.message ? err.message : 'Failed to open Roblox plugins folder.',
-      };
+      console.error('Failed to open plugins folder:', err);
+      return false;
     }
   });
 
-  ipcMain.on('run-spoofer-action', async (event, data) => {
-    let resultSent = false;
-    const safeSendResult = (payload) => {
-      resultSent = true;
-      sendSpooferResultToRenderer(payload);
-    };
+  onIpc('run-spoofer-action', async (event, data) => {
     try {
       await handleSpooferAction(
         data,
         getMainWindowFn,
         sendTransferUpdate,
-        safeSendResult,
+        sendSpooferResultToRenderer,
         sendStatusMessage,
       );
     } catch (err) {
-      const classified = classifyError(err, { stage: 'run' });
-      console.error('Spoofer run failed unexpectedly:', classified.raw);
-      if (!resultSent) {
-        safeSendResult({
-          output: `The run stopped unexpectedly: ${classified.message}
-
-Suggested fix: ${classified.suggestedFix || 'Check the support report and retry failed items.'}`,
-          success: false,
-          failedAnimationIdInput: data && data.animationId ? data.animationId : '',
-          failedCount:
-            data && data.animationId
-              ? String(data.animationId).split(/\r?\n/).filter(Boolean).length
-              : 0,
-          summary: {
-            mode: 'Unexpected error',
-            total: 0,
-            failures: [
-              {
-                stage: 'run',
-                category: classified.category,
-                label: classified.label,
-                reason: classified.message,
-                raw: classified.raw,
-                retryable: classified.retryable === true,
-                suggestedFix: classified.suggestedFix,
-              },
-            ],
-            failureCategories: { [classified.category || 'unknown']: 1 },
-          },
-        });
+      if (err?.message === 'Operation cancelled') {
+        sendSpooferResultToRenderer({ output: 'Operation cancelled.', success: false });
+        sendStatusMessage('Cancelled');
+        return;
       }
-      sendStatusMessage('Run failed - see Run Report');
-    } finally {
-      resetRunControls();
+      console.error('Unhandled spoofer action error:', err);
+      sendSpooferResultToRenderer({ output: `Unexpected error: ${err.message}`, success: false });
+      sendStatusMessage('Error: Unexpected failure');
     }
   });
 
-  ipcMain.on('spoofer-pause', () => {
+  onIpc('spoofer-pause', () => {
     pauseSpoofer();
-    sendStatusMessage('Paused after the current item finishes');
+    sendStatusMessage('Paused');
   });
-  ipcMain.on('spoofer-resume', () => {
+  onIpc('spoofer-resume', () => {
     resumeSpoofer();
     sendStatusMessage('Resuming...');
   });
-  ipcMain.on('spoofer-cancel', () => {
+  onIpc('spoofer-cancel', () => {
     cancelSpoofer();
-    sendStatusMessage('Canceling after current item finishes...');
+    sendStatusMessage('Cancelled');
   });
-  ipcMain.handle('check-session', () => loadSession());
-  ipcMain.on('clear-session', () => clearSession());
-  ipcMain.handle('clear-app-history', async () => {
-    await clearSession();
-    return { success: true };
-  });
-  ipcMain.handle('clear-asset-history', async () => {
-    await clearAssetHistory();
-    return { success: true };
-  });
-  ipcMain.handle('copy-debug-info', async (_event, context) => {
-    const text = await buildAppDebugInfo(context || {}, getReportDeps());
-    clipboard.writeText(text);
-    return { success: true, length: text.length };
+  handleIpc('check-session', () => loadSession());
+  onIpc('clear-session', () => {
+    void clearSession();
   });
 
-  ipcMain.handle('export-support-report', async (_event, context) => {
-    const report = await buildSupportReport(context || {}, getReportDeps());
-    const text = formatSupportReportText(report);
-    const result = await dialog.showSaveDialog({
-      title: 'Export Support Report',
-      defaultPath: `ISpooferMotion-Support-Report-${new Date().toISOString().slice(0, 10)}.txt`,
-      filters: [{ name: 'Text', extensions: ['txt'] }],
-    });
-    if (result.canceled || !result.filePath) return { success: false, canceled: true };
-    await fs.writeFile(result.filePath, text, 'utf8');
-    return { success: true, filePath: result.filePath, failureCount: report.run.failures.length };
-  });
-
-  ipcMain.handle('export-asset-history', async () => {
-    const history = await loadAssetHistory();
-    const rows = assetHistoryToRows(history);
-    const result = await dialog.showSaveDialog({
-      title: 'Export Cached Mappings',
-      defaultPath: `ISpooferMotion-Cached-Mappings-${new Date().toISOString().slice(0, 10)}.json`,
-      filters: [{ name: 'JSON', extensions: ['json'] }],
-    });
-    if (result.canceled || !result.filePath) return { success: false, canceled: true };
-    await fs.writeFile(result.filePath, JSON.stringify(rows, null, 2), 'utf8');
-    return { success: true, filePath: result.filePath, count: rows.length };
-  });
-
-  ipcMain.handle('fetch-audio-quota', async (event, data) => {
+  handleIpc('fetch-audio-quota', async (event, data) => {
+    data = normalizePayload(data);
     try {
       if (DEVELOPER_MODE)
         console.log('(Dev) Fetching audio quota with data:', {
@@ -1193,7 +336,7 @@ Suggested fix: ${classified.suggestedFix || 'Check the support report and retry 
       }
 
       if (DEVELOPER_MODE) console.log('(Dev) Fetching from Roblox API...');
-      const response = await fetchWithTimeout(
+      const response = await fetch(
         'https://publish.roblox.com/v1/asset-quotas?resourceType=RateLimitUpload&assetType=Audio',
         {
           headers: {
@@ -1201,23 +344,16 @@ Suggested fix: ${classified.suggestedFix || 'Check the support report and retry 
             'User-Agent': 'RobloxStudio/WinInet',
           },
         },
-        10000,
-        'Audio quota check',
       );
 
       if (DEVELOPER_MODE) console.log('(Dev) Quota API response status:', response.status);
       if (!response.ok) {
-        const errorText = await Promise.race([
-          response.text(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Quota error response read timed out')), 8000),
-          ),
-        ]).catch((err) => err.message);
+        const errorText = await response.text();
         if (DEVELOPER_MODE) console.log('(Dev) Quota API error:', errorText);
         return { error: `Failed to fetch quota: ${response.status}` };
       }
 
-      const quotaData = await readJsonWithTimeout(response, 10000, 'Audio quota response');
+      const quotaData = await response.json();
       if (DEVELOPER_MODE) console.log('(Dev) Quota data received:', quotaData);
       return quotaData;
     } catch (err) {
@@ -1226,8 +362,7 @@ Suggested fix: ${classified.suggestedFix || 'Check the support report and retry 
     }
   });
 
-  ipcMain.handle('select-folder', async (event) => {
-    const { dialog } = require('electron');
+  handleIpc('select-folder', async (event) => {
     try {
       const result = await dialog.showOpenDialog(getMainWindowFn(), {
         properties: ['openDirectory', 'createDirectory'],
@@ -1242,6 +377,10 @@ Suggested fix: ${classified.suggestedFix || 'Check the support report and retry 
     }
   });
 }
+
+/**
+ * Main spoofer action handler
+ */
 async function handleSpooferAction(
   data,
   getMainWindowFn,
@@ -1249,7 +388,11 @@ async function handleSpooferAction(
   sendSpooferResultToRenderer,
   sendStatusMessage,
 ) {
-  const runSignal = beginRunControls();
+  data = normalizePayload(data);
+
+  // Always reset run controls at the start of a new run so a previously-paused
+  // or cancelled run can't block the next one.
+  resetRunControls();
 
   if (DEVELOPER_MODE) {
     const sanitizedData = { ...data };
@@ -1258,16 +401,16 @@ async function handleSpooferAction(
   } else {
     console.log('MAIN_PROCESS: Received run-spoofer-action.');
   }
+
+  // If this is a resume, restore the original textarea input from the session file
+  // BEFORE parsing, so that entries are available even if the textarea is empty after a crash.
   if (data.resumeSession === true) {
     const savedSession = await loadSession();
-    const resumeInput =
-      savedSession && (savedSession.retryAnimationIdInput || savedSession.animationIdInput);
-    if (resumeInput) {
-      data.animationId = resumeInput;
+    if (savedSession && savedSession.animationIdInput) {
+      data.animationId = savedSession.animationIdInput;
     }
   }
 
-  const isResume = data.resumeSession === true;
   const hasCustomDownloadFolder = !!(
     data.downloadOnly &&
     data.downloadFolder &&
@@ -1276,6 +419,8 @@ async function handleSpooferAction(
   const downloadsDir = hasCustomDownloadFolder
     ? data.downloadFolder.trim()
     : path.join(app.getPath('userData'), 'ispoofer_downloads');
+
+  // Validate download-only mode requires folder selection
   if (data.downloadOnly && (!data.downloadFolder || !data.downloadFolder.trim())) {
     sendSpooferResultToRenderer({
       output: 'Please select a download folder for Download-Only mode.',
@@ -1285,17 +430,18 @@ async function handleSpooferAction(
     return;
   }
 
-  if (!hasCustomDownloadFolder && !isResume) {
+  if (!hasCustomDownloadFolder) {
     const cleared = await clearDownloadsDirectory(downloadsDir);
     if (!cleared) {
       if (DEVELOPER_MODE)
         console.warn('(Dev) Failed to fully clear downloads directory, proceeding anyway.');
-      sendStatusMessage('Warning: could not fully clear previous downloads; continuing.');
+      sendSpooferResultToRenderer({
+        output: 'Warning: Could not fully clear previous downloads.',
+        success: false,
+      });
     }
   } else if (DEVELOPER_MODE) {
-    console.log(
-      `(Dev) Skipping auto-clear: ${isResume ? 'resuming saved session' : 'using user-selected download folder'}`,
-    );
+    console.log('(Dev) Skipping auto-clear: using user-selected download folder', downloadsDir);
   }
 
   if (!data.enableSpoofing && !data.downloadOnly) {
@@ -1305,13 +451,17 @@ async function handleSpooferAction(
     });
     return;
   }
+
+  // Validate group ID is numeric if provided
   if (data.groupId && !/^\d+$/.test(String(data.groupId).trim())) {
     sendSpooferResultToRenderer({
-      output: `Invalid Group ID "${data.groupId}" - must be a number only, not a URL or text.`,
+      output: `Invalid Group ID "${data.groupId}" — must be a number only, not a URL or text.`,
       success: false,
     });
     return;
   }
+
+  // Both animation and sound uploads require an Open Cloud API key
   if (!data.downloadOnly && !data.apiKey) {
     sendSpooferResultToRenderer({
       output:
@@ -1320,77 +470,46 @@ async function handleSpooferAction(
     });
     return;
   }
-  const declaredAssetType = String(data.animationId || '')
-    .replace(/\r\n/g, '\n')
+
+  // Parse animations or sounds
+  const isSoundMode = data.spoofSounds === true;
+  const assetTypeName = isSoundMode ? 'Audio' : 'Animation';
+  const assetEntries = (data.animationId || '')
     .split('\n')
-    .map((line) => parseAssetTypeDirective(line))
-    .find(Boolean);
-  const isSoundMode = declaredAssetType ? declaredAssetType === 'sound' : data.spoofSounds === true;
-  const activeTask = isSoundMode ? soundGrabberTask : animationGrabberTask;
-  const assetTypeName = activeTask.assetTypeName;
-  const taskPlan = activeTask.plan(data);
-  const taskValidation = activeTask.validate(data);
-  if (!taskValidation.ok) {
-    const firstIssue = taskValidation.issues[0];
-    sendSpooferResultToRenderer({
-      output: firstIssue.message || 'Fix the listed task input issues before running.',
-      success: false,
-      summary: {
-        mode: 'Preflight',
-        total: 0,
-        failures: taskValidation.issues.map((issue) => ({
-          stage: issue.stage || 'preflight',
-          category: issue.category || 'invalid_input',
-          label: issue.label || '',
-          reason: issue.message || 'Invalid input',
-          retryable: false,
-          suggestedFix: issue.suggestedFix || '',
-        })),
-        failureCategories: taskValidation.issues.reduce((acc, issue) => {
-          const key = issue.category || 'invalid_input';
-          acc[key] = (acc[key] || 0) + 1;
-          return acc;
-        }, {}),
-      },
-    });
-    sendStatusMessage('Task input failed validation');
-    return;
-  }
-  const parseResult = taskPlan.parseResult;
-  let assetEntries = parseResult.entries;
+    .map((line) => {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) return null;
+      const match = trimmedLine.match(/^\[([^\]]+)\]\s*\[([^\]]+)\]\s*\[([^\]]+)\],?$/);
+      if (!match) return null;
+      const id = match[1].trim();
+      const name = match[2].trim();
+      const third = match[3].trim();
+      let creatorType, creatorId;
+      if (third.startsWith('User')) {
+        creatorType = 'user';
+        creatorId = third.substring(4).replace(/[^0-9]/g, ''); // Extract only numbers
+      } else if (third.startsWith('Group')) {
+        creatorType = 'group';
+        creatorId = third.substring(5).replace(/[^0-9]/g, ''); // Extract only numbers
+      } else {
+        return null;
+      }
+      return { id, name, creatorType, creatorId };
+    })
+    .filter((entry) => entry && entry.id && entry.creatorId);
 
   if (assetEntries.length === 0) {
-    const rejectedText = formatRejectedLines(parseResult.rejected);
     sendSpooferResultToRenderer({
-      output: `No valid ${isSoundMode ? 'sound' : 'animation'} entries.${
-        rejectedText
-          ? `
-
-Skipped input:
-${rejectedText}`
-          : ''
-      }`,
+      output: `No valid ${isSoundMode ? 'sound' : 'animation'} entries.`,
       success: false,
-      summary: {
-        mode: 'Parse',
-        total: 0,
-        failures: (parseResult.rejected || []).map((item) => ({
-          stage: 'parse',
-          category: 'Invalid input',
-          reason: `Line ${item.lineNumber}: ${item.reason}`,
-          input: item.input,
-          retryable: false,
-        })),
-        failureCategories: { 'Invalid input': (parseResult.rejected || []).length },
-      },
     });
     return;
   }
 
-  if (parseResult.warnings.length > 0) {
-    sendStatusMessage(parseResult.warnings[0]);
-  }
-  let animationEntries = assetEntries;
+  // For backwards compatibility with code that expects animationEntries
+  const animationEntries = assetEntries;
+
+  // Get cookie
   const firstEntry = animationEntries[0];
   let robloxCookie = data.robloxCookie;
   if (data.autoDetectCookie) {
@@ -1415,159 +534,19 @@ ${rejectedText}`
     return;
   }
 
-  const robloxCookieHeader = buildRobloxCookieHeader(robloxCookie);
-  if (!robloxCookieHeader) {
-    sendSpooferResultToRenderer({ output: 'Invalid ROBLOSECURITY cookie format.', success: false });
-    return;
-  }
-
-  function createMachineId() {
-    const parts = [];
-    for (let i = 0; i < 4; i++)
-      parts.push(
-        (crypto.randomBytes
-          ? crypto.randomBytes(4)
-          : crypto.webcrypto.getRandomValues(new Uint8Array(4))
-        )
-          .toString('hex')
-          .toUpperCase(),
-      );
-    return parts.join('-');
-  }
-  const machineId = createMachineId();
-  const browserSessionId = crypto.randomUUID
-    ? crypto.randomUUID()
-    : crypto.randomBytes(16).toString('hex');
-  const runSessionId = crypto.randomUUID
-    ? crypto.randomUUID()
-    : crypto.randomBytes(16).toString('hex');
-
-  let currentCsrfToken = ''; // Global CSRF cache for this run
-
-  // Helper to get headers dynamically per request (prevents WAF caching)
-  function getDynamicStudioHeaders() {
-    return {
-      'User-Agent': 'RobloxStudio/WinInet',
-      Accept: '*/*',
-      'Accept-Encoding': 'gzip, deflate',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Cache-Control': 'no-cache',
-      Requester: 'Client',
-      'Sec-CH-UA': '" Not A;Brand";v="99", "Chromium";v="101"',
-      'Sec-CH-UA-Mobile': '?0',
-      'Sec-CH-UA-Platform': '"Windows"',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-site',
-      'Roblox-Session-Id': runSessionId,
-      'Roblox-Browser-Session-Id': browserSessionId,
-      'Roblox-Machine-Id': machineId,
-      'Roblox-Idempotency-Key': crypto.randomUUID
-        ? crypto.randomUUID()
-        : crypto.randomBytes(16).toString('hex'),
-      'Content-Type': 'application/json',
-      Cookie: robloxCookieHeader,
-    };
-  }
-
-  const missingCreatorCount = animationEntries.filter(
-    (entry) => !entry.creatorType || !entry.creatorId,
-  ).length;
-  if (missingCreatorCount > 0) {
-    try {
-      const fallbackUserId = await getAuthenticatedUserId(robloxCookie);
-      animationEntries = applyDefaultCreator(animationEntries, {
-        creatorType: 'user',
-        creatorId: fallbackUserId,
-      });
-      assetEntries = animationEntries;
-      sendStatusMessage(
-        `Using authenticated user ${fallbackUserId} as source fallback for ${missingCreatorCount} item(s).`,
-      );
-    } catch (err) {
-      const rejectedText = formatRejectedLines(parseResult.rejected);
-      const classified = classifyError(err, { stage: 'preflight' });
-      if (classified.category === 'bad_cookie') {
-        sendSpooferResultToRenderer({
-          output: `Some entries are missing [User123] or [Group123], and the authenticated user could not be resolved for fallback.
-
-${classified.message}${
-            rejectedText
-              ? `
-
-Also skipped input:
-${rejectedText}`
-              : ''
-          }`,
-          success: false,
-          summary: {
-            mode: 'Parse',
-            total: animationEntries.length,
-            failures: animationEntries
-              .filter((entry) => !entry.creatorType || !entry.creatorId)
-              .map((entry) => ({
-                id: entry.id,
-                name: entry.name,
-                stage: 'parse',
-                category: 'Missing source creator',
-                reason:
-                  'Add [User123] or [Group123] to this line, or use a valid cookie so the app can use your authenticated user as a fallback.',
-                retryable: false,
-              })),
-            failureCategories: { 'Missing source creator': missingCreatorCount },
-          },
-        });
-        return;
-      }
-
-      animationEntries = animationEntries.map((entry) =>
-        entry.creatorType && entry.creatorId
-          ? entry
-          : {
-              ...entry,
-              creatorType: 'user',
-              creatorId: '',
-              usedUnknownCreatorFallback: true,
-            },
-      );
-      assetEntries = animationEntries;
-      sendStatusMessage(
-        `Warning: ${missingCreatorCount} item(s) have no source creator. Authenticated user lookup failed, so the run will try generic place/direct fallbacks.`,
-      );
-    }
-  }
-
-  sendStatusMessage('Running preflight checks...');
-  const basicPreflight = await runBasicPreflightChecks({
-    data,
-    assetEntries: animationEntries,
-    isSoundMode,
-    downloadsDir,
-    robloxCookie,
-  });
-  if (!basicPreflight.ok) {
+  // Get CSRF token
+  let csrfToken;
+  try {
+    csrfToken = await getCsrfToken(robloxCookie);
+  } catch (err) {
     sendSpooferResultToRenderer({
-      output: formatPreflightResult(basicPreflight.issues, basicPreflight.warnings),
+      output: `Failed to get CSRF token: ${err.message}`,
       success: false,
-      summary: {
-        mode: 'Preflight',
-        total: animationEntries.length,
-        failures: basicPreflight.issues.map((reason) => ({
-          stage: 'Preflight',
-          category: 'Fix before running',
-          reason,
-        })),
-        failureCategories: { Preflight: basicPreflight.issues.length },
-      },
     });
-    sendStatusMessage('Preflight failed - fix the listed items before running');
     return;
   }
-  if (basicPreflight.warnings.length > 0) {
-    sendStatusMessage(`Preflight warning: ${basicPreflight.warnings[0]}`);
-  }
-  const preflightAuthenticatedUserId = basicPreflight.authenticatedUserId || null;
-  const csrfToken = null;
+
+  // Ensure downloads directory exists
   try {
     if (!(await fs.stat(downloadsDir).catch(() => null))) {
       await fs.mkdir(downloadsDir, { recursive: true });
@@ -1580,18 +559,12 @@ ${rejectedText}`
     });
     return;
   }
-  const autoSaveSession = data.autoSaveSession !== false;
-  const sessionSaveBuffer = createBufferedSessionSaver({
-    save: saveSession,
-    minIntervalMs: 2500,
-    maxPending: 12,
-  });
-  const persistSession = async (options = {}) => {
-    if (autoSaveSession && session) await sessionSaveBuffer.save(session, options);
-  };
-  const cancelPendingSessionSave = () => sessionSaveBuffer.cancel();
+
+  // Session setup (crash recovery + resume)
+  const isResume = data.resumeSession === true;
   let session = isResume ? await loadSession() : null;
   if (isResume && session) {
+    // Filter to only assets not yet completed in the prior session
     const completedIds = new Set((session.completedMappings || []).map((m) => m.originalId));
     animationEntries.splice(
       0,
@@ -1600,6 +573,7 @@ ${rejectedText}`
     );
 
     if (animationEntries.length === 0) {
+      // All assets were already completed — just show the saved mappings and finish
       const mappingOutput = (session.completedMappings || [])
         .map((m) => `${m.originalId} = ${m.newId},`)
         .join('\n');
@@ -1610,7 +584,7 @@ ${rejectedText}`
     }
 
     sendSpooferResultToRenderer({
-      output: `Resuming - ${animationEntries.length} asset(s) remaining from previous session.\n`,
+      output: `Resuming — ${animationEntries.length} asset(s) remaining from previous session.\n`,
       success: true,
     });
   } else {
@@ -1621,117 +595,18 @@ ${rejectedText}`
       animationIdInput: data.animationId, // stored so resume works even if textarea is empty after crash
       totalCount: animationEntries.length,
       completedMappings: [],
-      completedDownloads: [],
-      failedEntries: [],
-      retryAnimationIdInput: '',
-      status: 'running',
     };
-    await persistSession({ force: true });
+    await saveSession(session);
   }
 
-  let verboseOutputMessage = `Processing ${animationEntries.length} ${isSoundMode ? 'sound' : 'animation'}(s)...\n`;
+  let verboseOutputMessage = `Downloading ${animationEntries.length} ${isSoundMode ? 'sound' : 'animation'}(s)...\n`;
   let successfulUploadCount = 0;
   let downloadedSuccessfullyCount = 0;
+  // Seed mappings from prior completed session work
   let uploadMappingOutput = (session.completedMappings || [])
     .map((m) => `${m.originalId} = ${m.newId},`)
     .join('\n');
   if (uploadMappingOutput) uploadMappingOutput += '\n';
-
-  const completedDownloadMap = new Map();
-  const savedCompletedDownloads = Array.isArray(session.completedDownloads)
-    ? session.completedDownloads
-    : [];
-  const validCompletedDownloads = [];
-  for (const completedDownload of savedCompletedDownloads) {
-    if (!completedDownload || !completedDownload.originalId || !completedDownload.filePath)
-      continue;
-    try {
-      const stat = await fs.stat(completedDownload.filePath);
-      if (stat && stat.isFile() && stat.size > 0) {
-        completedDownloadMap.set(String(completedDownload.originalId), completedDownload);
-        validCompletedDownloads.push(completedDownload);
-      }
-    } catch (_) {}
-  }
-  if (validCompletedDownloads.length !== savedCompletedDownloads.length) {
-    session.completedDownloads = validCompletedDownloads;
-    session.lastUpdatedAt = new Date().toISOString();
-    await persistSession({ force: true });
-  }
-
-  const uploadTargetKey =
-    data.groupId && String(data.groupId).trim() ? `group:${String(data.groupId).trim()}` : 'user';
-  const ignoreResolutionCache = data.ignoreAssetCache === true;
-  const resolutionCache = await loadAssetResolutionCache();
-  let resolutionCacheDirty = false;
-  let cachedHistoryMappings = [];
-  let runAssetHistory = null;
-  let runAssetHistoryDirty = false;
-  const assetHistorySaveBuffer = createBufferedSessionSaver({
-    save: saveAssetHistory,
-    minIntervalMs: 3000,
-    maxPending: 20,
-  });
-  const getRunAssetHistory = async () => {
-    if (!runAssetHistory) runAssetHistory = await loadAssetHistory();
-    return runAssetHistory;
-  };
-  const persistAssetHistory = async (options = {}) => {
-    if (!runAssetHistoryDirty || !runAssetHistory) return;
-    await assetHistorySaveBuffer.save(runAssetHistory, options);
-    if (options.force === true) runAssetHistoryDirty = false;
-  };
-  if (!data.downloadOnly && !isResume && !data.ignoreAssetCache) {
-    const history = await getRunAssetHistory();
-    const uncachedEntries = [];
-    for (const entry of animationEntries) {
-      const cached = history[buildHistoryKey(assetTypeName, uploadTargetKey, entry.id)];
-      if (cached && cached.newId) {
-        cachedHistoryMappings.push({ entry, newId: String(cached.newId) });
-        uploadMappingOutput += `${entry.id} = ${cached.newId},\n`;
-      } else {
-        uncachedEntries.push(entry);
-      }
-    }
-    if (cachedHistoryMappings.length > 0) {
-      animationEntries.splice(0, animationEntries.length, ...uncachedEntries);
-      sendStatusMessage(`Skipped ${cachedHistoryMappings.length} cached asset mapping(s)`);
-    }
-    if (animationEntries.length === 0) {
-      sendSpooferResultToRenderer({
-        output: uploadMappingOutput.trim().replace(/,$/, ''),
-        success: true,
-        failedAnimationIdInput: '',
-        failedCount: 0,
-        summary: {
-          total: cachedHistoryMappings.length,
-          downloaded: 0,
-          uploaded: 0,
-          cached: cachedHistoryMappings.length,
-          downloadFailures: 0,
-          uploadFailures: 0,
-          skippedUploads: cachedHistoryMappings.length,
-          downloadOnly: false,
-          mode: 'Cached mappings',
-          durationSeconds: 0,
-          failureCategories: {},
-          failures: [],
-          mappings: (uploadMappingOutput || '')
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean),
-          cachedMappings: cachedHistoryMappings.map((item) => ({
-            name: item.entry.name,
-            originalId: item.entry.id,
-            newId: item.newId,
-            savedAt: item.savedAt || '',
-          })),
-        },
-      });
-      sendStatusMessage('Run complete - cached mappings reused');
-      return;
-    }
-  }
 
   const initialTransferStates = [];
   for (const entry of animationEntries) {
@@ -1756,31 +631,35 @@ ${rejectedText}`
   }
 
   let hasAuthError = false;
-  const stageMetrics = createStageMetrics();
+
+  // Get the maxPlaceIds and maxPlaceIdRetries from data, defaults to 10 and 3
   const maxPlaceIds = data.maxPlaceIds || 10;
   const maxPlaceIdRetries = data.maxPlaceIdRetries || 3;
   const overridePlaceId = data.overridePlaceId ? parseInt(data.overridePlaceId) : null;
+
+  // Get placeIds for each creator (map creatorId -> array of placeIds)
   const placeIdMap = {};
   if (overridePlaceId) {
+    // If override place ID is provided, use it for all creators
     if (DEVELOPER_MODE)
       console.log(
         `(Dev) Override Place ID provided: ${overridePlaceId}. Using this for all creators instead of fetching.`,
       );
     const uniqueCreators = [
-      ...new Set(animationEntries.map((e) => normalizeCreatorKey(e.creatorType, e.creatorId))),
+      ...new Set(animationEntries.map((e) => `${e.creatorType}:${e.creatorId}`)),
     ];
     for (const creatorKey of uniqueCreators) {
-      placeIdMap[creatorKey] = normalizePlaceIdCandidates([overridePlaceId]);
+      placeIdMap[creatorKey] = [overridePlaceId];
     }
     if (DEVELOPER_MODE) console.log(`(Dev) Resolved placeIdMap with override:`, placeIdMap);
   } else if (animationEntries.length > 0) {
     if (DEVELOPER_MODE)
       console.log(
-        `(Dev) Found ${animationEntries.length > 0 ? [...new Set(animationEntries.map((e) => normalizeCreatorKey(e.creatorType, e.creatorId)))].length : 0} unique creators. Fetching placeIds (max ${maxPlaceIds} per creator, ${maxPlaceIdRetries} retries)...`,
+        `(Dev) Found ${animationEntries.length > 0 ? [...new Set(animationEntries.map((e) => `${e.creatorType}:${e.creatorId}`))].length : 0} unique creators. Fetching placeIds (max ${maxPlaceIds} per creator, ${maxPlaceIdRetries} retries)...`,
       );
 
     const uniqueCreators = [
-      ...new Set(animationEntries.map((e) => normalizeCreatorKey(e.creatorType, e.creatorId))),
+      ...new Set(animationEntries.map((e) => `${e.creatorType}:${e.creatorId}`)),
     ];
     if (DEVELOPER_MODE)
       console.log(`(Dev) Fetching placeIds for ${uniqueCreators.length} creator(s) in parallel...`);
@@ -1788,13 +667,6 @@ ${rejectedText}`
     await Promise.all(
       uniqueCreators.map(async (creatorKey) => {
         const [creatorType, creatorId] = creatorKey.split(':');
-        if (!creatorId) {
-          placeIdMap[creatorKey] = normalizePlaceIdCandidates([]);
-          sendStatusMessage(
-            'Some input rows have no source creator. Trying generic place/direct fallbacks for those items.',
-          );
-          return;
-        }
         try {
           const placeIds = await retryAsync(
             () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie, maxPlaceIds),
@@ -1805,15 +677,13 @@ ${rejectedText}`
                 console.warn(`(Dev) Attempt ${attempt}/${max} for ${creatorKey}: ${err.message}`);
             },
           );
-          placeIdMap[creatorKey] = normalizePlaceIdCandidates(
-            Array.isArray(placeIds) ? placeIds : [placeIds],
-          );
+          placeIdMap[creatorKey] = Array.isArray(placeIds) ? placeIds : [placeIds];
           if (DEVELOPER_MODE)
             console.log(`(Dev) Got ${placeIdMap[creatorKey].length} placeIds for ${creatorKey}`);
         } catch (error) {
           if (DEVELOPER_MODE)
             console.warn(`(Dev) Could not get placeIds for ${creatorKey}: ${error.message}`);
-          placeIdMap[creatorKey] = normalizePlaceIdCandidates([]);
+          placeIdMap[creatorKey] = [99840799534728];
         }
       }),
     );
@@ -1821,617 +691,277 @@ ${rejectedText}`
     if (DEVELOPER_MODE) console.log('(Dev) Resolved placeIdMap:', placeIdMap);
   }
 
-  if (!ignoreResolutionCache) {
-    for (const creatorKey of Object.keys(placeIdMap)) {
-      placeIdMap[creatorKey] = orderPlaceIdsWithCache(
-        resolutionCache,
-        creatorKey,
-        normalizePlaceIdCandidates(placeIdMap[creatorKey]),
-      );
-    }
-  }
+  // Batch download locations
   const locationsMap = {};
-  let batchItems = buildBatchItems(animationEntries, assetTypeName);
-  if (!ignoreResolutionCache) {
-    const uncachedBatchItems = [];
-    for (const item of batchItems) {
-      const entry = animationEntries.find(
-        (candidate) => String(candidate.id) === String(item.requestId),
-      );
-      const cachedLocation = entry
-        ? getFreshCachedLocation(resolutionCache, assetTypeName, entry)
-        : null;
-      if (cachedLocation) {
-        locationsMap[item.requestId] = cachedLocation;
-      } else {
-        uncachedBatchItems.push(item);
-      }
-    }
-    if (uncachedBatchItems.length !== batchItems.length) {
-      const reusedCount = batchItems.length - uncachedBatchItems.length;
-      sendStatusMessage(`Reused ${reusedCount} cached location lookup(s)`);
-      batchItems = uncachedBatchItems;
-    }
-  }
+  const batchItems = animationEntries.map((entry) => ({
+    requestId: entry.id,
+    assetId: parseInt(entry.id),
+    assetType: assetTypeName,
+    creatorType: entry.creatorType,
+    creatorId: entry.creatorId,
+  }));
+  // Batch behavior controls (allow overrides via incoming data)
   const BATCH_MAX_RETRIES = parseInt(data.batchRetries, 10) || 3;
   const BATCH_RETRY_DELAY_MS = parseInt(data.batchRetryDelay, 10) || 2000;
   const BATCH_TIMEOUT_MS = parseInt(data.batchTimeoutMs, 10) || 15000; // 15s per batch
-  const batchPlan = getBatchPlan(batchItems.length, { chunkSize: data.batchChunkSize });
-  const BATCH_CREATOR_DELAY_MS = toPositiveInteger(
-    data.batchCreatorDelayMs,
-    batchPlan.creatorDelayMs,
-    0,
-    5000,
-  );
-  let chunkSize = batchPlan.chunkSize;
+  const chunkSize = parseInt(data.batchChunkSize, 10) || 20; // Reduce from 50 to 20 by default to mitigate 504s
 
-  const assetAccessPreflight = await runAssetAccessPreflightChecks({
-    batchItems,
-    placeIdMap,
-    robloxCookieHeader,
-    assetTypeName,
-    timeoutMs: BATCH_TIMEOUT_MS,
-  });
-  if (!assetAccessPreflight.ok) {
-    sendSpooferResultToRenderer({
-      output: formatPreflightResult(assetAccessPreflight.issues, assetAccessPreflight.warnings),
-      success: false,
-      failedAnimationIdInput: animationEntries.slice(0, 5).map(formatAssetEntry).join('\n'),
-      failedCount: animationEntries.length,
-      summary: {
-        mode: 'Preflight',
-        total: animationEntries.length,
-        failures: assetAccessPreflight.issues.map((reason) => ({
-          stage: 'Preflight',
-          category: 'permission_denied',
-          label: 'Permission denied',
-          reason,
-        })),
-        failureCategories: { permission_denied: assetAccessPreflight.issues.length },
-      },
-    });
-    sendStatusMessage(
-      'Preflight failed - source assets are not accessible with this account/place',
-    );
-    return;
-  }
-  if (assetAccessPreflight.warnings.length > 0) {
-    sendStatusMessage(`Preflight warning: ${assetAccessPreflight.warnings[0]}`);
-  } else {
-    sendStatusMessage('Preflight complete - starting batch');
-  }
-
-  async function fetchBatchRequest(items, placeId, creatorKey) {
-    const itemsWithoutCreator = items.map(({ creatorType, creatorId, ...rest }) => rest);
-
-    for (let attempt = 1; attempt <= BATCH_MAX_RETRIES; attempt++) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
-      let resp;
-      let caughtErr = null;
-      try {
-        const headers = {
-          ...getDynamicStudioHeaders(),
-          'Roblox-Place-Id': String(placeId),
-        };
-        if (currentCsrfToken) headers['x-csrf-token'] = currentCsrfToken;
-
-        resp = await fetchWithTimeout(
-          'https://assetdelivery.roblox.com/v2/assets/batch',
-          {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(itemsWithoutCreator),
-            signal: controller.signal,
-          },
-          BATCH_TIMEOUT_MS,
-          'Batch asset location request',
-        );
-      } catch (err) {
-        caughtErr = err;
-      } finally {
-        clearTimeout(timeout);
-      }
-
-      if (resp && resp.status === 403) {
-        const newToken = resp.headers.get('x-csrf-token');
-        if (newToken) {
-          currentCsrfToken = newToken;
-          if (DEVELOPER_MODE)
-            console.log('(Dev) [Batch] Extracted new CSRF token. Retrying request...');
-          attempt--; // Do not count CSRF negotiation against max retries
-          continue;
-        }
-      }
-
-      if (resp && resp.status === 429) {
-        const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
-        let backoffMs =
-          retryAfter > 0 ? retryAfter * 1000 : BATCH_RETRY_DELAY_MS * Math.pow(1.5, attempt - 1);
-
-        // Add random jitter between 10% and 30% to avoid synchronized retry waves (WAF detection)
-        const jitter = backoffMs * (0.1 + Math.random() * 0.2);
-        backoffMs = Math.min(backoffMs + jitter, 45000); // Cap at 45 seconds
-
-        if (DEVELOPER_MODE)
-          console.log(
-            `(Dev) [Batch] Rate limited. Backing off for ${Math.round(backoffMs)}ms (Attempt ${attempt}/${BATCH_MAX_RETRIES})`,
-          );
-
-        await new Promise((r) => setTimeout(r, backoffMs));
-        continue;
-      }
-
-      if (caughtErr || (resp && !resp.ok)) {
-        if (attempt < BATCH_MAX_RETRIES) {
-          const backoffMs = BATCH_RETRY_DELAY_MS * attempt + Math.random() * 500;
-          await new Promise((r) => setTimeout(r, backoffMs));
-          continue;
-        }
-        throw caughtErr || new Error(`Batch request failed with status ${resp?.status}`);
-      }
-
-      const bodyText = await readTextWithTimeout(resp, 8000, 'Batch asset location response');
-      try {
-        const parsedBody = JSON.parse(bodyText);
-        // Ghost Error filtering: if body contains top-level errors and NO locations, reject it
-        if (
-          parsedBody &&
-          parsedBody.errors &&
-          Array.isArray(parsedBody.errors) &&
-          parsedBody.errors.length > 0
-        ) {
-          if (!parsedBody.locations || parsedBody.locations.length === 0) {
-            throw new Error(
-              `Roblox returned 200 OK but body contains errors: ${JSON.stringify(parsedBody.errors)}`,
-            );
-          }
-        }
-        return parsedBody;
-      } catch (err) {
-        throw new Error(`Failed to parse batch response. Body: ${bodyText.substring(0, 100)}`);
-      }
-    }
-  }
-
-  function isUsableLocation(loc) {
-    if (!loc) return false;
-    // also reject locations where the body itself signals an error (Roblox returns 200 with error JSON sometimes)
-    if (
-      loc.parseError ||
-      (loc.errors && loc.errors.length > 0 && !(loc.locations && loc.locations.length > 0))
-    )
-      return false;
-    return !!(loc.locations && loc.locations.length > 0 && loc.locations[0].location);
-  }
-
-  async function fetchSingleBatchLocation(item) {
-    const assetId = String(item.requestId);
-    let foundLocation = null;
-    let fallbackErrors = [];
-    const creatorKey = normalizeCreatorKey(item.creatorType, item.creatorId);
-    const placeIdArray = normalizePlaceIdCandidates(placeIdMap[creatorKey]);
-    const itemWithoutCreator = (({ creatorType, creatorId, ...rest }) => rest)(item);
-
-    const trySingleBatch = async (placeId) => {
-      try {
-        const resp = await fetchWithTimeout(
-          'https://assetdelivery.roblox.com/v2/assets/batch',
-          {
-            method: 'POST',
-            headers: {
-              ...getDynamicStudioHeaders(),
-              'Roblox-Place-Id': String(placeId),
-            },
-            body: JSON.stringify([itemWithoutCreator]),
-          },
-          Math.max(5000, BATCH_TIMEOUT_MS),
-          `Single asset batch fallback ${placeId}`,
-        );
-        if (!resp.ok) {
-          fallbackErrors.push(`[Single batch ${placeId}] HTTP ${resp.status}`);
-          return null;
-        }
-        const body = await readJsonWithTimeout(
-          resp,
-          8000,
-          `Single asset batch fallback response ${placeId}`,
-        );
-        const loc = Array.isArray(body) ? body[0] : body;
-        if (isUsableLocation(loc)) {
-          return {
-            ...loc,
-            requestId: loc && loc.requestId !== undefined ? loc.requestId : assetId,
-          };
-        }
-        fallbackErrors.push(
-          `[Single batch ${placeId}] ${extractBatchLocationError(loc) || 'no location'}`,
-        );
-      } catch (err) {
-        let msg = err && err.message ? err.message : String(err);
-        if (msg.includes('aborted') || msg.includes('timeout')) msg = 'Blocked/Dropped';
-        fallbackErrors.push(`[Single batch ${placeId}] ${msg}`);
-      }
-      return null;
-    };
-
-    const tryUrl = async (url, label) => {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
-        const resp = await fetch(url, {
-          method: 'GET',
-          headers: getDynamicStudioHeaders(),
-          redirect: 'manual',
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (resp.status === 302 || resp.status === 301) {
-          const loc = resp.headers.get('location');
-          if (loc && (loc.includes('rbxcdn.com') || loc.includes('roblox.com'))) return loc;
-        } else if (resp.ok) {
-          // If it didn't redirect but gave 200, the URL might be a direct CDN link already
-          if (resp.url.includes('rbxcdn.com') || resp.url.includes('roblox.com')) return resp.url;
-          fallbackErrors.push(`[${label}] HTTP ${resp.status} without downloadable location`);
-        } else {
-          fallbackErrors.push(`[${label}] HTTP ${resp.status}`);
-        }
-      } catch (err) {
-        let msg = err.message;
-        if (msg.includes('aborted') || msg.includes('timeout')) msg = 'Blocked/Dropped';
-        fallbackErrors.push(`[${label}] ${msg}`);
-      }
-      return null;
-    };
-
-    // Advanced Resolution 1: Direct endpoint fallback (resolves latest public version)
-    if (DEVELOPER_MODE) console.log(`(Dev) Trying advanced resolution for ${assetId}...`);
-    for (const placeId of placeIdArray.slice(0, 8)) {
-      await checkPaused();
-      checkCancelled();
-      const batchLoc = await trySingleBatch(placeId);
-      if (batchLoc) return batchLoc;
-    }
-
-    // Reduced timeout for v1/asset to prevent long WAF stalls
-    foundLocation = await tryUrl(`https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`, 'Direct');
-
-    // Advanced Resolution 2: Historical version scanning
-    if (!foundLocation) {
-      // Try the first few versions as they are sometimes left public
-      for (let v = 1; v <= 3; v++) {
-        await checkPaused();
-        checkCancelled();
-        foundLocation = await tryUrl(`https://assetdelivery.roblox.com/v1/asset/?id=${assetId}&version=${v}`, `Version ${v}`);
-        if (foundLocation) break;
-      }
-    }
-
-    // Advanced Resolution 3: Audio Preview fallback
-    if (!foundLocation && (item.assetType === 'sound' || isSoundMode)) {
-      try {
-        const headers = { ...getDynamicStudioHeaders(), 'Content-Type': 'application/json' };
-        if (currentCsrfToken) headers['x-csrf-token'] = currentCsrfToken;
-
-        const previewResp = await fetchWithTimeout(`https://catalog.roblox.com/v1/catalog/items/details`, {
-          method: 'POST',
-          headers: headers,
-          body: JSON.stringify({ items: [{ itemType: "Asset", id: parseInt(assetId) }] })
-        }, 5000, "Audio Preview Metadata");
-
-        if (previewResp.ok) {
-          const previewBody = await readTextWithTimeout(previewResp, 5000);
-          try {
-            const data = JSON.parse(previewBody);
-            // Some API routes expose the preview inside data[0].audioPreviewUrl or similar,
-            // we scrape common JSON keys if they exist and point to rbxcdn.com/audio/
-            const jsonStr = JSON.stringify(data);
-            const previewMatch = jsonStr.match(/https:\/\/[a-z0-9-]+\.rbxcdn\.com\/[^"'\s]+?\.(?:mp3|ogg)/i);
-            if (previewMatch) {
-              foundLocation = previewMatch[0];
-            }
-          } catch (e) {}
-        }
-      } catch (err) {
-        let msg = err.message;
-        if (msg.includes('aborted') || msg.includes('timeout')) msg = 'Blocked/Dropped';
-        fallbackErrors.push(`[Audio Preview] ${msg}`);
-      }
-    }
-
-    // If we found a location via advanced resolution, construct a fake batch response
-    if (foundLocation) {
-      return {
-        requestId: assetId,
-        locations: [{ location: foundLocation }]
-      };
-    }
-
-    return {
-      requestId: assetId,
-      errors: [{ message: `Advanced resolution methods exhausted without finding a public asset. (${fallbackErrors.slice(0, 3).join(' | ')})` }]
-    };
-  }
-
-  async function resolveBatchChunkWithSplit(items, creatorKey, depth = 0) {
-    if (!items || items.length === 0) return;
-    const placeIdArray = normalizePlaceIdCandidates(placeIdMap[creatorKey]);
-    let unresolved = items.slice();
-    let lastErrorsById = new Map();
-
-    for (let placeIndex = 0; placeIndex < placeIdArray.length; placeIndex++) {
-      const placeId = placeIdArray[placeIndex];
-      if (unresolved.length === 0) break;
-      await checkPaused();
-      checkCancelled();
-      try {
-        if (DEVELOPER_MODE)
-          console.log(
-            `(Dev) Batch request for ${creatorKey}: ${unresolved.length} item(s) with placeId ${placeId}`,
-          );
-        const batchResponse = await fetchBatchRequest(unresolved, placeId, creatorKey);
-        const locations = Array.isArray(batchResponse) ? batchResponse : [];
-        const locationById = new Map();
-        locations.forEach((loc, index) => {
-          const explicitId = loc && loc.requestId !== undefined ? String(loc.requestId) : '';
-          if (explicitId) locationById.set(explicitId, loc);
-          const fallbackItem = unresolved[index];
-          if (fallbackItem && !locationById.has(String(fallbackItem.requestId))) {
-            locationById.set(String(fallbackItem.requestId), {
-              ...loc,
-              requestId:
-                loc && loc.requestId !== undefined ? loc.requestId : String(fallbackItem.requestId),
-            });
-          }
-        });
-        const stillUnresolved = [];
-
-        for (const item of unresolved) {
-          const loc = locationById.get(String(item.requestId));
-          if (isUsableLocation(loc)) {
-            locationsMap[item.requestId] = loc;
-            if (!ignoreResolutionCache) {
-              const entryForCache = animationEntries.find(
-                (entry) => String(entry.id) === String(item.requestId),
-              );
-              if (entryForCache)
-                rememberCachedLocation(resolutionCache, assetTypeName, entryForCache, loc, placeId);
-              rememberGoodPlaceId(resolutionCache, creatorKey, placeId);
-              resolutionCacheDirty = true;
-            }
-          } else {
-            const errorText =
-              extractBatchLocationError(loc) || 'No downloadable location returned.';
-            lastErrorsById.set(String(item.requestId), errorText);
-            stillUnresolved.push(item);
-          }
-        }
-
-        unresolved = stillUnresolved;
-      } catch (err) {
-        const classified = err.classified || classifyError(err, { stage: 'download' });
-        if (/\b401\b|\b403\b/.test(classified.raw || err.message || '')) hasAuthError = true;
-        if (
-          placeIndex < placeIdArray.length - 1 &&
-          classified.category !== 'bad_cookie' &&
-          classified.category !== 'canceled'
-        ) {
-          for (const item of unresolved) {
-            lastErrorsById.set(String(item.requestId), classified.raw || classified.message);
-          }
-          sendStatusMessage(
-            `Batch lookup failed for place ${placeId}; trying another place candidate...`,
-          );
-          continue;
-        }
-        if (unresolved.length > 1) {
-          const nextSize = Math.max(1, Math.ceil(unresolved.length / 2));
-          sendStatusMessage(
-            `Batch lookup failed; splitting ${unresolved.length} item(s) into smaller groups...`,
-          );
-          for (const split of chunkArray(unresolved, nextSize)) {
-            await resolveBatchChunkWithSplit(split, creatorKey, depth + 1);
-          }
-          return;
-        }
-        // If it's a single item and batch failed, just break and let the advanced fallback handle it.
-        break;
-      }
-    }
-
-    for (const item of unresolved) {
-      await checkPaused();
-      checkCancelled();
-      const transfer = initialTransferStates.find((t) => t.originalAssetId === item.requestId);
-      if (transfer)
-        sendTransferUpdate({
-          id: transfer.id,
-          status: 'processing',
-          message: 'Trying single-asset lookup fallback',
-        });
-      const singleLoc = await fetchSingleBatchLocation(item);
-      if (!isUsableLocation(singleLoc) && lastErrorsById.has(String(item.requestId))) {
-        locationsMap[item.requestId] = createBatchLocationFailure(
-          item,
-          `Batch lookup failed: ${lastErrorsById.get(String(item.requestId))}. Single lookup: ${extractBatchLocationError(singleLoc)}`,
-          { stage: 'download' },
-        );
-      } else {
-        locationsMap[item.requestId] = singleLoc;
-        if (isUsableLocation(singleLoc) && !ignoreResolutionCache) {
-          const entryForCache = animationEntries.find(
-            (entry) => String(entry.id) === String(item.requestId),
-          );
-          if (entryForCache)
-            rememberCachedLocation(resolutionCache, assetTypeName, entryForCache, singleLoc, null);
-          resolutionCacheDirty = true;
-        }
-      }
-      if (transfer && singleLoc.errors && singleLoc.errors.length) {
-        const errMsg =
-          singleLoc.errors[0].message ||
-          singleLoc.errors[0].Message ||
-          'Single-asset lookup failed';
-        sendTransferUpdate({
-          id: transfer.id,
-          status: 'queued',
-          error: errMsg,
-          message: 'Will try direct download fallback',
-        });
-      }
-    }
-  }
-
-  const METADATA_CONCURRENCY = toPositiveInteger(
-    data.metadataConcurrency,
-    batchPlan.metadataConcurrency || 2,
-    1,
-    6,
-  );
   if (DEVELOPER_MODE)
     console.log(
-      `(Dev) Fetching batch locations for ${batchItems.length} ${isSoundMode ? 'sounds' : 'animations'} with creator-specific placeIds, chunk size ${chunkSize}, metadata concurrency ${METADATA_CONCURRENCY}`,
+      `(Dev) Fetching batch locations for ${batchItems.length} ${isSoundMode ? 'sounds' : 'animations'} with creator-specific placeIds`,
     );
-  const creatorGroups = groupBatchItemsByCreator(batchItems);
-  let creatorGroupIndex = 0;
-  for (const [creatorKey, items] of creatorGroups.entries()) {
-    if (creatorGroupIndex > 0 && BATCH_CREATOR_DELAY_MS > 0)
-      await waitForRunDelay(BATCH_CREATOR_DELAY_MS);
-    creatorGroupIndex++;
-
-    function randomizedChunkArray(arr, baseSize) {
-      const chunks = [];
-      let i = 0;
-      while (i < arr.length) {
-        // Randomize chunk size between 70% and 100% of baseSize
-        const vary = Math.max(1, Math.floor(baseSize * (0.7 + Math.random() * 0.3)));
-        chunks.push(arr.slice(i, i + vary));
-        i += vary;
+  for (let i = 0; i < batchItems.length; i += chunkSize) {
+    checkCancelled();
+    await checkPaused();
+    const chunk = batchItems.slice(i, i + chunkSize);
+    try {
+      // Group items by creator to use the correct placeId
+      const creatorGroups = {};
+      for (const item of chunk) {
+        const creatorKey = `${item.creatorType}:${item.creatorId}`;
+        if (!creatorGroups[creatorKey]) creatorGroups[creatorKey] = [];
+        creatorGroups[creatorKey].push(item);
       }
-      return chunks;
-    }
-    const chunks = randomizedChunkArray(items, chunkSize);
 
-    await runQueue(chunks, {
-      concurrency: Math.min(METADATA_CONCURRENCY, chunks.length),
-      signal: runSignal,
-      worker: async (chunk) => {
-        await checkPaused();
+      // Process each creator group separately, with a small inter-group delay to avoid rate limits
+      let creatorGroupIndex = 0;
+      for (const [creatorKey, items] of Object.entries(creatorGroups)) {
         checkCancelled();
-        await resolveBatchChunkWithSplit(chunk, creatorKey);
-        return { success: true };
-      },
-      isCancelError,
-      createErrorResult: (err) => {
-        const classified = classifyError(err, { stage: 'resolve_location' });
-        if (DEVELOPER_MODE)
-          console.warn(`(Dev) Metadata chunk failed for ${creatorKey}: ${classified.raw}`);
-        return { success: false, error: classified.message, category: classified.category };
-      },
-    });
-  }
+        await checkPaused();
+        if (creatorGroupIndex > 0) await new Promise((r) => setTimeout(r, 500));
+        creatorGroupIndex++;
+        let [creatorType, creatorId] = creatorKey.split(':');
+        let placeIdArray = placeIdMap[creatorKey] || [99840799534728];
+        let placeIdIndex = 0;
+        let retryCount = 0;
+        const maxRetries = maxPlaceIdRetries;
 
-  if (resolutionCacheDirty) {
-    await saveAssetResolutionCache(resolutionCache);
-    resolutionCacheDirty = false;
+        while (placeIdIndex < placeIdArray.length) {
+          checkCancelled();
+          await checkPaused();
+          const placeId = placeIdArray[placeIdIndex];
+          const itemsWithoutCreator = items.map(({ creatorType, creatorId, ...rest }) => rest);
+
+          if (DEVELOPER_MODE)
+            console.log(
+              `(Dev) Batch request for ${creatorKey}: ${items.length} items with placeId ${placeId}${placeIdIndex > 0 ? ` (place index ${placeIdIndex}/${placeIdArray.length})` : ''}`,
+            );
+
+          // Batch fetch with retry + timeout (retry on 429/5xx/504/timeout)
+          let locations;
+          for (let attempt = 1; attempt <= BATCH_MAX_RETRIES; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
+            let resp;
+            let caughtErr = null;
+            try {
+              resp = await fetch('https://assetdelivery.roblox.com/v2/assets/batch', {
+                method: 'POST',
+                headers: {
+                  'User-Agent': 'RobloxStudio/WinInet',
+                  'Content-Type': 'application/json',
+                  Cookie: `.ROBLOSECURITY=${robloxCookie}`,
+                  'Roblox-Place-Id': String(placeId),
+                },
+                body: JSON.stringify(itemsWithoutCreator),
+                signal: controller.signal,
+              });
+            } catch (err) {
+              caughtErr = err;
+            } finally {
+              clearTimeout(timeout);
+            }
+
+            if (resp && resp.ok) {
+              locations = await resp.json();
+              break;
+            }
+
+            // Decide if retryable
+            const status = resp ? resp.status : 0;
+            const isTimeout =
+              caughtErr &&
+              (caughtErr.name === 'AbortError' || /aborted|timeout/i.test(caughtErr.message));
+            const retryable =
+              isTimeout ||
+              status === 429 ||
+              status === 502 ||
+              status === 503 ||
+              status === 504 ||
+              status === 500;
+            const statusText = resp
+              ? `${status}`
+              : isTimeout
+                ? 'timeout'
+                : caughtErr
+                  ? caughtErr.message
+                  : 'unknown';
+            if (DEVELOPER_MODE)
+              console.warn(
+                `(Dev) Batch attempt ${attempt}/${BATCH_MAX_RETRIES} for ${creatorKey} @ place ${placeId} failed: ${statusText}${retryable && attempt < BATCH_MAX_RETRIES ? ' -> retrying' : ''}`,
+              );
+
+            if (!retryable || attempt === BATCH_MAX_RETRIES) {
+              throw new Error(`Batch request failed for ${creatorKey}: ${statusText}`);
+            }
+
+            // On 429, respect retry-after header; otherwise use configured delay
+            let delayMs = BATCH_RETRY_DELAY_MS;
+            if (status === 429 && resp) {
+              const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
+              if (retryAfter > 0) delayMs = Math.min(retryAfter * 1000, 120000);
+              else delayMs = Math.max(BATCH_RETRY_DELAY_MS, 15000); // default 15s on 429
+            }
+            const jitter = Math.floor(Math.random() * 300);
+            await new Promise((r) => setTimeout(r, delayMs + jitter));
+          }
+
+          if (!locations) throw new Error(`Batch request failed for ${creatorKey}: no response`);
+          if (DEVELOPER_MODE) console.log(`(Dev) Batch response for ${creatorKey}:`, locations);
+
+          // Check if response contains batch errors (403s for restricted assets)
+          const hasBatchErrors = locations.some(
+            (loc) => loc.errors && loc.errors.length > 0 && loc.errors[0].code === 403,
+          );
+
+          // Print detailed batch errors for visibility
+          const errorItems = locations.filter((loc) => loc.errors && loc.errors.length > 0);
+          if (errorItems.length > 0) {
+            for (const locErr of errorItems) {
+              const firstErr = locErr.errors[0] || {};
+              const errMsg = firstErr.Message || firstErr.message || JSON.stringify(firstErr);
+              console.warn(`Batch error for ${locErr.requestId} at place ${placeId}:`, firstErr);
+              if (DEVELOPER_MODE)
+                console.log(
+                  '(Dev) Full batch item with error:',
+                  JSON.stringify(locErr, null, 2).substring(0, 500),
+                );
+            }
+          }
+
+          if (hasBatchErrors) {
+            if (placeIdIndex < placeIdArray.length - 1) {
+              // Try next place ID
+              if (DEVELOPER_MODE)
+                console.log(
+                  `(Dev) Batch errors detected for ${creatorKey} with placeId ${placeId}. Trying next place...`,
+                );
+              placeIdIndex++;
+              continue;
+            } else {
+              // All places exhausted
+              // If an override is set, do NOT fetch fresh place IDs; accept errors
+              if (overridePlaceId) {
+                if (DEVELOPER_MODE)
+                  console.log(
+                    `(Dev) Override Place ID in use for ${creatorKey}. Skipping fresh placeId fetch and accepting batch errors.`,
+                  );
+                for (const loc of locations) {
+                  locationsMap[loc.requestId] = loc;
+                }
+                break;
+              }
+              // Otherwise, try to get fresh place IDs with retries
+              if (retryCount < maxRetries) {
+                retryCount++;
+                if (DEVELOPER_MODE)
+                  console.log(
+                    `(Dev) All places exhausted for ${creatorKey}. Fetching fresh placeIds (retry ${retryCount}/${maxRetries})...`,
+                  );
+                try {
+                  const freshPlaceIds = await retryAsync(
+                    () => getPlaceIdFromCreator(creatorType, creatorId, robloxCookie, maxPlaceIds),
+                    1,
+                    1000,
+                  );
+                  placeIdMap[creatorKey] = Array.isArray(freshPlaceIds)
+                    ? freshPlaceIds
+                    : [freshPlaceIds];
+                  placeIdArray = placeIdMap[creatorKey];
+                  placeIdIndex = 0;
+                  if (DEVELOPER_MODE)
+                    console.log(
+                      `(Dev) Got fresh placeIds for ${creatorKey}: ${placeIdArray.join(', ')}`,
+                    );
+                  continue;
+                } catch (refreshErr) {
+                  if (DEVELOPER_MODE)
+                    console.warn(
+                      `(Dev) Failed to refresh placeIds for ${creatorKey}: ${refreshErr.message}`,
+                    );
+                  // Accept the errors and continue
+                  for (const loc of locations) {
+                    locationsMap[loc.requestId] = loc;
+                  }
+                  break;
+                }
+              } else {
+                // Max retries reached, accept the errors
+                if (DEVELOPER_MODE)
+                  console.log(
+                    `(Dev) Max retries reached for ${creatorKey}, accepting batch errors`,
+                  );
+                for (const loc of locations) {
+                  locationsMap[loc.requestId] = loc;
+                }
+                break;
+              }
+            }
+          } else {
+            // Success - no errors
+            if (DEVELOPER_MODE)
+              console.log(
+                `(Dev) Batch request successful for ${creatorKey} with placeId ${placeId}`,
+              );
+            for (const loc of locations) {
+              locationsMap[loc.requestId] = loc;
+            }
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Batch request error:', error);
+      // Consider only 401/403 as auth errors; 5xx/504/timeout are not auth
+      const msg = error && error.message ? error.message : '';
+      if (/\b401\b|\b403\b/.test(msg)) {
+        hasAuthError = true;
+      }
+      sendStatusMessage(`Batch request failed: ${error.message}`);
+      for (const item of chunk) {
+        const transfer = initialTransferStates.find((t) => t.originalAssetId === item.requestId);
+        if (transfer)
+          sendTransferUpdate({ id: transfer.id, status: 'error', error: 'Batch request failed' });
+      }
+    }
   }
 
   const UPLOAD_RETRIES = parseInt(data.uploadRetries, 10) || 3;
   const UPLOAD_RETRY_DELAY_MS = parseInt(data.uploadRetryDelay, 10) || 5000;
-  const UPLOAD_TIMEOUT_MS = parseInt(data.uploadTimeoutMs, 10) || 120000;
+  // Download controls (optional overrides via data)
   const DOWNLOAD_RETRIES = parseInt(data.downloadRetries, 10) || 2;
   const DOWNLOAD_RETRY_DELAY_MS = parseInt(data.downloadRetryDelayMs, 10) || 2000;
-  const DOWNLOAD_TIMEOUT_MS = parseInt(data.downloadTimeoutMs, 10) || 60000; // Increased to 60s
-  const runWithConcurrency = async (items, limit, worker, queueOptions = {}) =>
-    runQueue(items, {
-      concurrency: limit,
-      worker,
-      signal: runSignal,
-      beforeItem: async () => {
-        await checkPaused();
-        checkCancelled();
-      },
-      shouldContinue: queueOptions.shouldContinue,
-      onItemComplete: queueOptions.onItemComplete,
-      onItemError: queueOptions.onItemError,
-      isCancelError,
-      createCancelResult: (_err, item) => ({
-        entry: item.entry || item,
-        success: false,
-        canceled: true,
-        error: 'Canceled',
-      }),
-      createErrorResult: (err, item) => {
-        const entry = item.entry || item;
-        const stage = item.stage || (item.filePath ? 'upload' : 'download');
-        const classified = classifyError(err, { stage });
-        return createStageFailure(entry, stage, classified.raw, {
-          category: classified.category,
-          userMessage: classified.message,
-          retryable: classified.retryable === true,
-        });
-      },
-    });
+  const DOWNLOAD_TIMEOUT_MS = parseInt(data.downloadTimeoutMs, 10) || 15000;
+
+  // Parallel downloads
   sendStatusMessage(`Downloading ${isSoundMode ? 'sounds' : 'animations'}...`);
   let downloadCompleted = 0;
   const downloadStartTime = Date.now();
-  const batchProblemCount = animationEntries.reduce((count, entry) => {
-    const loc = locationsMap[entry.id];
-    return (
-      count +
-      (!loc || (loc.errors && loc.errors.length > 0) || !loc.locations || loc.locations.length === 0
-        ? 1
-        : 0)
-    );
-  }, 0);
-  const resumedDownloadResults = [];
-  const downloadQueue = [];
-  for (const entry of animationEntries) {
-    const completed = completedDownloadMap.get(String(entry.id));
-    if (completed) {
-      const transfer = initialTransferStates.find((t) => t.originalAssetId === entry.id);
-      if (transfer)
-        sendTransferUpdate({
-          id: transfer.id,
-          status: 'complete',
-          progress: 100,
-          message: 'Using saved download from previous session',
-        });
-      resumedDownloadResults.push(createCompletedDownloadResult(entry, completed));
-    } else {
-      downloadQueue.push(entry);
-    }
-  }
-  if (resumedDownloadResults.length > 0) {
-    sendStatusMessage(
-      `Reused ${resumedDownloadResults.length} completed download(s) from the saved session`,
-    );
-  }
-
-  downloadQueue.sort(
-    (a, b) => getDownloadPriority(a, locationsMap) - getDownloadPriority(b, locationsMap),
-  );
-  const baseDownloadConcurrency = Math.min(
-    parseInt(data.downloadConcurrency, 10) || 10,
-    Math.max(1, downloadQueue.length),
-  );
-  const plannedDownloadCap = batchPlan.downloadConcurrencyCap || 10;
-  const DOWNLOAD_CONCURRENCY =
-    batchProblemCount > 0
-      ? Math.max(
-          1,
-          Math.min(baseDownloadConcurrency, Math.ceil(Math.max(1, downloadQueue.length) / 12) || 1),
-        )
-      : Math.max(1, Math.min(baseDownloadConcurrency, plannedDownloadCap));
-  if (downloadQueue.length > 0 && DOWNLOAD_CONCURRENCY < baseDownloadConcurrency) {
-    sendStatusMessage(
-      `Adaptive mode: download concurrency set to ${DOWNLOAD_CONCURRENCY} for this batch`,
-    );
-  }
-
-  const downloadOne = async (entry) => {
+  const downloadPromises = animationEntries.map(async (entry) => {
     checkCancelled();
-    const itemStartedAt = Date.now();
+    await checkPaused();
+    const loc = locationsMap[entry.id];
+    if (!loc) return { entry, success: false, error: 'No location in batch response' };
+    if (loc.errors && loc.errors.length > 0) {
+      const errorObj = loc.errors[0];
+      const errorMsg =
+        errorObj.Message || errorObj.message || JSON.stringify(errorObj) || 'Unknown';
+      if (DEVELOPER_MODE) console.log('Batch error for', entry.id, ':', errorObj);
+      return { entry, success: false, error: `Batch error: ${errorMsg}` };
+    }
+    if (!loc.locations || loc.locations.length === 0)
+      return { entry, success: false, error: 'No locations in batch response' };
+    const url = loc.locations[0].location;
     const sanitizedName = sanitizeFilename(entry.name);
     const fileExtension = isSoundMode ? '.ogg' : '.rbxm';
     const fileName = `${sanitizedName}_${entry.id}${fileExtension}`;
@@ -2439,217 +969,63 @@ ${rejectedText}`
     const downloadTransfer = initialTransferStates.find((t) => t.originalAssetId === entry.id);
     const downloadTransferId = downloadTransfer.id;
     sendTransferUpdate({ id: downloadTransferId, status: 'processing' });
-    const creatorKey = normalizeCreatorKey(entry.creatorType, entry.creatorId);
-    const entryPlaceIds = normalizePlaceIdCandidates(
-      placeIdMap[creatorKey] || DEFAULT_PLACE_ID_CANDIDATES,
-    );
-    const entryPlaceId = entryPlaceIds[0];
-
-    const tryDownloadUrl = async (url, reason) => {
-      await checkPaused();
-      checkCancelled();
-      if (reason) {
-        sendTransferUpdate({ id: downloadTransferId, status: 'processing', message: reason });
-      }
-      return downloadAnimationAssetWithProgress(
-        url,
-        robloxCookie,
-        filePath,
-        downloadTransferId,
-        entry.name,
-        entry.id,
-        sendTransferUpdate,
-        entryPlaceId,
-        {
-          timeoutMs: DOWNLOAD_TIMEOUT_MS,
-          retries: DOWNLOAD_RETRIES,
-          retryDelayMs: DOWNLOAD_RETRY_DELAY_MS,
-          signal: runSignal,
-          waitForRetry: waitForRunDelay,
-          isCancelError,
-        },
-      );
-    };
-
-    const loc = locationsMap[entry.id];
-    let batchErrorMessage = '';
-    let result = null;
-    if (loc && loc.locations && loc.locations.length > 0 && loc.locations[0].location) {
-      result = await tryDownloadUrl(loc.locations[0].location);
-    } else {
-      let batchErrorRaw = '';
-      if (loc && loc.errors && loc.errors.length > 0) {
-        const errorObj = loc.errors[0];
-        batchErrorMessage =
-          errorObj.Message || errorObj.message || JSON.stringify(errorObj) || 'Unknown batch error';
-        batchErrorRaw = errorObj.raw || '';
-        if (DEVELOPER_MODE) console.log('Batch error for', entry.id, ':', errorObj);
-      } else {
-        batchErrorMessage = 'No location in batch response';
-      }
-      const directUrlSet = new Set();
-      for (const placeId of entryPlaceIds) {
-        directUrlSet.add(
-          `https://assetdelivery.roblox.com/v1/asset?id=${encodeURIComponent(entry.id)}&placeId=${encodeURIComponent(String(placeId || ''))}`,
-        );
-        directUrlSet.add(
-          `https://assetdelivery.roblox.com/v1/asset/?id=${encodeURIComponent(entry.id)}&placeId=${encodeURIComponent(String(placeId || ''))}`,
-        );
-      }
-      directUrlSet.add(
-        `https://assetdelivery.roblox.com/v1/asset?id=${encodeURIComponent(entry.id)}`,
-      );
-      directUrlSet.add(
-        `https://assetdelivery.roblox.com/v1/asset/?id=${encodeURIComponent(entry.id)}`,
-      );
-      const directUrls = [...directUrlSet];
-      let directAttemptIndex = 0;
-      for (const directUrl of directUrls) {
-        await checkPaused();
-        checkCancelled();
-        directAttemptIndex++;
-        result = await tryDownloadUrl(
-          directUrl,
-          `Batch lookup failed; trying direct asset download fallback ${directAttemptIndex}/${directUrls.length}`,
-        );
-        if (result && result.success) break;
-      }
-      if (!result || !result.success) {
-        downloadCompleted++;
-        const etaStr = getEtaString(downloadStartTime, downloadCompleted, downloadQueue.length);
-        sendStatusMessage(
-          `Downloaded ${downloadCompleted + resumedDownloadResults.length}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
-        );
-        const fallbackErrorStr = result && result.error ? result.error : 'failed';
-        const errorRaw = batchErrorRaw
-            ? `${batchErrorRaw}. Direct fallback: ${fallbackErrorStr}`
-            : `Batch error: ${batchErrorMessage}. Direct fallback: ${fallbackErrorStr}`;
-        const classified = classifyError(errorRaw, { stage: 'download' });
-        const failure = createStageFailure(entry, 'download', classified.raw, {
-          category: classified.category,
-          userMessage: classified.message,
-          rawError: batchErrorMessage,
-          retryable: classified.retryable === true,
-        });
-        failure.durationMs = Date.now() - itemStartedAt;
-        stageMetrics.mark('download', failure);
-        return failure;
-      }
-    }
-    downloadCompleted++;
-    const etaStr = getEtaString(downloadStartTime, downloadCompleted, downloadQueue.length);
-    sendStatusMessage(
-      `Downloaded ${downloadCompleted + resumedDownloadResults.length}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
-    );
-    if (!result.success) {
-      const classified = classifyError(result.error || 'Download failed', { stage: 'download' });
-      const failure = createStageFailure(entry, 'download', classified.raw, {
-        category: classified.category,
-        userMessage: classified.message,
-        retryable: classified.retryable === true,
-      });
-      failure.durationMs = Date.now() - itemStartedAt;
-      stageMetrics.mark('download', failure);
-      return failure;
-    }
-    if (!session.completedDownloads.some((item) => String(item.originalId) === String(entry.id))) {
-      session.completedDownloads.push({
-        originalId: String(entry.id),
-        filePath,
-        name: entry.name,
-        bytesWritten: result.bytesWritten || 0,
-        downloadedAt: new Date().toISOString(),
-      });
-      session.lastUpdatedAt = new Date().toISOString();
-      await persistSession();
-    }
-    const success = createStageSuccess(entry, 'download', {
+    const creatorKey = `${entry.creatorType}:${entry.creatorId}`;
+    const entryPlaceIds = placeIdMap[creatorKey] || [99840799534728];
+    const entryPlaceId = Array.isArray(entryPlaceIds) ? entryPlaceIds[0] : entryPlaceIds;
+    const result = await downloadAnimationAssetWithProgress(
+      url,
+      robloxCookie,
       filePath,
-      error: result.error,
-      bytesWritten: result.bytesWritten || 0,
-      durationMs: Date.now() - itemStartedAt,
-    });
-    stageMetrics.mark('download', success);
-    return success;
-  };
-  const downloadResults = [
-    ...resumedDownloadResults,
-    ...(downloadQueue.length > 0
-      ? await runWithConcurrency(downloadQueue, DOWNLOAD_CONCURRENCY, downloadOne)
-      : []),
-  ];
-  if (_isCancelled) {
-    sendSpooferResultToRenderer({
-      output: 'Run canceled.',
-      success: false,
-      failedAnimationIdInput: animationEntries.map(formatAssetEntry).join('\n'),
-      failedCount: animationEntries.length,
-      summary: {
-        total: animationEntries.length + cachedHistoryMappings.length,
-        downloaded: downloadResults.filter((r) => r && r.success).length,
-        uploaded: 0,
-        cached: cachedHistoryMappings.length,
-        downloadFailures: downloadResults.filter((r) => r && !r.success && !r.canceled).length,
-        uploadFailures: 0,
-        skippedUploads: Math.max(
-          0,
-          animationEntries.length - downloadResults.filter((r) => r && r.success).length,
-        ),
-        downloadOnly: !!data.downloadOnly,
-        mode: 'Canceled',
-        failureCategories: { Canceled: 1 },
-        failures: [],
-        mappings: (uploadMappingOutput || '')
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean),
+      downloadTransferId,
+      entry.name,
+      entry.id,
+      sendTransferUpdate,
+      entryPlaceId,
+      {
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+        retries: DOWNLOAD_RETRIES,
+        retryDelayMs: DOWNLOAD_RETRY_DELAY_MS,
       },
-    });
-    session.status = 'incomplete';
-    session.lastUpdatedAt = new Date().toISOString();
-    await persistSession({ force: true });
-    await persistAssetHistory({ force: true });
-    sendStatusMessage('Run canceled');
-    resetRunControls();
-    return;
-  }
+    );
+    downloadCompleted++;
+    const elapsed = (Date.now() - downloadStartTime) / 1000;
+    const avgTimePerItem = elapsed / downloadCompleted;
+    const remaining = animationEntries.length - downloadCompleted;
+    const etaSeconds = Math.ceil(avgTimePerItem * remaining);
+    const etaMin = Math.floor(etaSeconds / 60);
+    const etaSec = etaSeconds % 60;
+    const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
+    sendStatusMessage(
+      `Downloaded ${downloadCompleted}/${animationEntries.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
+    );
+    return {
+      entry,
+      filePath: result.success ? filePath : null,
+      success: result.success,
+      error: result.error,
+    };
+  });
+  const downloadResults = await Promise.all(downloadPromises);
+
+  // Resolve the authenticated user ID once before the upload loop (needed for user-owned uploads)
   let authenticatedUserId = null;
   if (!data.downloadOnly && data.apiKey && !data.groupId) {
     try {
-      authenticatedUserId =
-        preflightAuthenticatedUserId || (await getAuthenticatedUserId(robloxCookie));
+      authenticatedUserId = await getAuthenticatedUserId(robloxCookie);
       if (DEVELOPER_MODE)
         console.log(`(Dev) Resolved authenticated user ID for upload: ${authenticatedUserId}`);
     } catch (err) {
       if (DEVELOPER_MODE)
         console.warn(`(Dev) Could not resolve authenticated user ID: ${err.message}`);
-      const classified = classifyError(err, { stage: 'upload' });
       sendSpooferResultToRenderer({
-        output: `Failed to resolve your Roblox user ID: ${classified.message}\n\nMake sure your cookie is valid before uploading to your user account.`,
+        output: `Failed to resolve your Roblox user ID: ${err.message}\n\nMake sure your cookie is valid.`,
         success: false,
-        failedAnimationIdInput: animationEntries.map(formatAssetEntry).join('\n'),
-        failedCount: animationEntries.length,
-        summary: {
-          mode: 'Upload preflight',
-          total: animationEntries.length,
-          failures: [
-            {
-              stage: 'upload',
-              category: classified.category,
-              label: classified.label,
-              reason: classified.message,
-              raw: classified.raw,
-              retryable: classified.retryable === true,
-              suggestedFix: classified.suggestedFix,
-            },
-          ],
-          failureCategories: { [classified.category || 'unknown']: 1 },
-        },
       });
-      sendStatusMessage('Upload preflight failed - could not resolve Roblox user ID');
       return;
     }
   }
+
+  // Parallel uploads (skip if download-only mode)
   let uploadResults = [];
   if (data.downloadOnly) {
     sendStatusMessage('Download-only mode: Skipping uploads');
@@ -2659,29 +1035,32 @@ ${rejectedText}`
     let uploadCompleted = 0;
     const uploadStartTime = Date.now();
     const successfulDownloads = downloadResults.filter((r) => r.success);
-    const plannedUploadCap = batchPlan.uploadConcurrencyCap || 10;
-    const UPLOAD_CONCURRENCY = Math.min(
-      parseInt(data.uploadConcurrency, 10) || 10,
-      plannedUploadCap,
-      successfulDownloads.length || 1,
-    );
-    let hardUploadStop = null;
-    if (UPLOAD_CONCURRENCY < (parseInt(data.uploadConcurrency, 10) || 10)) {
-      sendStatusMessage(
-        `Adaptive mode: upload concurrency set to ${UPLOAD_CONCURRENCY} for this batch`,
+    // Open Cloud API rate limit is 60 req/min. With ~10s average async processing,
+    // 10 concurrent slots stays safely under the limit.
+    const UPLOAD_CONCURRENCY = Math.min(10, successfulDownloads.length);
+
+    // Worker pool: as soon as a slot finishes it picks up the next item immediately,
+    // instead of waiting for a whole batch to finish before starting the next.
+    const runWithConcurrency = async (items, limit, worker) => {
+      const results = new Array(items.length);
+      let index = 0;
+      const workers = Array.from(
+        { length: Math.max(1, Math.min(limit, items.length)) },
+        async () => {
+          while (true) {
+            checkCancelled();
+            await checkPaused();
+            const current = index++;
+            if (current >= items.length) break;
+            results[current] = await worker(items[current]);
+          }
+        },
       );
-    }
+      await Promise.all(workers);
+      return results;
+    };
 
     const uploadOne = async (downloadResult) => {
-      if (hardUploadStop) {
-        return createStageFailure(downloadResult.entry, 'upload', hardUploadStop.message, {
-          category: hardUploadStop.category,
-          userMessage: hardUploadStop.message,
-          retryable: false,
-          suggestedFix: hardUploadStop.suggestedFix,
-        });
-      }
-      const itemStartedAt = Date.now();
       const entry = downloadResult.entry;
       const filePath = downloadResult.filePath;
       const uploadTransferId = crypto.randomUUID();
@@ -2695,191 +1074,106 @@ ${rejectedText}`
         progress: 0,
         size: fileSize,
       });
-
+      const onRetryAttempt = (attempt, maxAttempts, err) => {
+        const errMsg = err.message || '';
+        const isRateLimit = errMsg.includes('429') || errMsg.includes('Rate limit');
+        const isFinal = attempt >= maxAttempts;
+        const logMsg = isRateLimit
+          ? `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} rate-limited (429).${isFinal ? ' No more retries.' : ' Retrying with delay...'}`
+          : `Upload attempt ${attempt}/${maxAttempts} for ${entry.name} failed.${isFinal ? ' No more retries.' : ' Retrying...'}`;
+        if (DEVELOPER_MODE && isRateLimit) {
+          console.warn(`(Dev) [RATE LIMIT DETECTED] ${entry.name}: ${errMsg}`);
+        }
+        sendTransferUpdate({
+          id: uploadTransferId,
+          status: 'processing',
+          message: logMsg,
+          error: errMsg.substring(0, 120),
+        });
+      };
       const uploadFn = async () => {
         await checkPaused();
-        checkCancelled();
-        const result = await withTimeout(
-          () =>
-            publishAnimationRbxmWithProgress(
-              filePath,
-              entry.name,
-              robloxCookie,
-              csrfToken,
-              data.groupId && String(data.groupId).trim() ? data.groupId : null,
-              uploadTransferId,
-              sendTransferUpdate,
-              assetTypeName,
-              data.apiKey || null,
-              authenticatedUserId || null,
-              {
-                signal: runSignal,
-                waitForDelay: waitForRunDelay,
-                beforeNetwork: async () => {
-                  await checkPaused();
-                  checkCancelled();
-                },
-                isCancelError,
-              },
-            ),
-          UPLOAD_TIMEOUT_MS,
-          `Upload for ${entry.name}`,
+        const result = await publishAnimationRbxmWithProgress(
+          filePath,
+          entry.name,
+          robloxCookie,
+          csrfToken,
+          data.groupId && String(data.groupId).trim() ? data.groupId : null,
+          uploadTransferId,
+          sendTransferUpdate,
+          assetTypeName,
+          data.apiKey || null,
+          authenticatedUserId || null,
         );
         if (!result.success) throw new Error(result.error || 'Upload failed');
         return result;
       };
-
-      const onAttemptFailure = (attempt, maxAttempts, err, classifiedFromRetry, willRetry) => {
-        const classified = classifiedFromRetry || classifyError(err, { stage: 'upload' });
-        const isFinal = attempt >= maxAttempts || willRetry === false;
-        if (DEVELOPER_MODE && classified.category === 'rate_limited') {
-          console.warn(`(Dev) [RATE LIMIT DETECTED] ${entry.name}: ${classified.raw}`);
-        }
-        sendTransferUpdate({
-          id: uploadTransferId,
-          status: isFinal ? 'error' : 'cooldown',
-          message: `${classified.label || classified.category}: ${isFinal || classified.retryable !== true ? 'No more retries.' : 'Waiting before retry...'}`,
-          error: classified.message,
-          errorCategory: classified.category,
-        });
-      };
-
-      const onCooldownTick = (remainingSeconds, totalSeconds, nextAttempt, maxAttempts, err) => {
-        const classified = classifyError(err, { stage: 'upload' });
-        sendTransferUpdate({
-          id: uploadTransferId,
-          status: 'cooldown',
-          progress: Math.max(
-            0,
-            Math.min(99, Math.round(((totalSeconds - remainingSeconds) / totalSeconds) * 100)),
-          ),
-          message: `${classified.label || classified.category}: retrying in ${remainingSeconds}s (${nextAttempt}/${maxAttempts})`,
-          error: classified.message,
-          errorCategory: classified.category,
-          cooldownRemaining: remainingSeconds,
-        });
-        sendStatusMessage(`Paused for cooldown: retrying ${entry.name} in ${remainingSeconds}s`);
-      };
-
       try {
-        const uploadResult = await retryWithCooldown(
+        const uploadResult = await retryAsync(
           uploadFn,
           UPLOAD_RETRIES,
           UPLOAD_RETRY_DELAY_MS,
-          onAttemptFailure,
-          onCooldownTick,
-          {
-            stage: 'upload',
-            maxDelayMs: 60000,
-            waitForDelay: waitForRunDelay,
-            beforeAttempt: async () => {
-              await checkPaused();
-              checkCancelled();
-            },
-          },
+          onRetryAttempt,
         );
+        // Save progress after each successful upload
         if (uploadResult.success && uploadResult.assetId) {
-          if (!session.completedMappings.some((m) => String(m.originalId) === String(entry.id))) {
-            session.completedMappings.push({
-              originalId: String(entry.id),
-              newId: uploadResult.assetId,
-            });
-          }
-          const history = await getRunAssetHistory();
-          rememberAssetMappingInObject(history, {
-            assetTypeName,
-            targetKey: uploadTargetKey,
-            originalId: entry.id,
+          session.completedMappings.push({
+            originalId: String(entry.id),
             newId: uploadResult.assetId,
-            name: entry.name,
           });
-          runAssetHistoryDirty = true;
-          await persistAssetHistory();
-          session.lastUpdatedAt = new Date().toISOString();
-          await persistSession();
+          await saveSession(session);
         }
         uploadCompleted++;
-        const etaStr = getEtaString(uploadStartTime, uploadCompleted, successfulDownloads.length);
+        const elapsed = (Date.now() - uploadStartTime) / 1000;
+        const avgTimePerItem = elapsed / uploadCompleted;
+        const remaining = successfulDownloads.length - uploadCompleted;
+        const etaSeconds = Math.ceil(avgTimePerItem * remaining);
+        const etaMin = Math.floor(etaSeconds / 60);
+        const etaSec = etaSeconds % 60;
+        const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
         sendStatusMessage(
           `Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
         );
-        const success = createStageSuccess(entry, 'upload', {
+        return {
+          entry,
+          success: uploadResult.success,
           assetId: uploadResult.assetId,
           error: uploadResult.error,
-          fileSize,
-          durationMs: Date.now() - itemStartedAt,
-        });
-        stageMetrics.mark('upload', success);
-        return success;
+        };
       } catch (finalRetryError) {
-        const classified = classifyError(finalRetryError, { stage: 'upload' });
         sendTransferUpdate({
           id: uploadTransferId,
           status: 'error',
-          error: classified.message,
-          errorCategory: classified.category,
-          message: `All upload attempts failed: ${classified.label || classified.category}`,
+          error: `All upload attempts failed: ${finalRetryError.message}`,
         });
-        if (isHardUploadStopCategory(classified.category)) {
-          hardUploadStop = classified;
-          sendStatusMessage(
-            `${classified.label || 'Upload stopped'} - remaining uploads were skipped to avoid wasting requests`,
-          );
-        }
         uploadCompleted++;
-        const etaStr = getEtaString(uploadStartTime, uploadCompleted, successfulDownloads.length);
+        const elapsed = (Date.now() - uploadStartTime) / 1000;
+        const avgTimePerItem = elapsed / uploadCompleted;
+        const remaining = successfulDownloads.length - uploadCompleted;
+        const etaSeconds = Math.ceil(avgTimePerItem * remaining);
+        const etaMin = Math.floor(etaSeconds / 60);
+        const etaSec = etaSeconds % 60;
+        const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
         sendStatusMessage(
           `Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
         );
-        const failure = createStageFailure(entry, 'upload', classified.raw, {
-          category: classified.category,
-          userMessage: classified.message,
-          retryable: classified.retryable === true,
-        });
-        failure.durationMs = Date.now() - itemStartedAt;
-        failure.fileSize = fileSize;
-        stageMetrics.mark('upload', failure);
-        return failure;
+        return { entry, success: false, error: finalRetryError.message };
       }
     };
-    uploadResults = await runWithConcurrency(successfulDownloads, UPLOAD_CONCURRENCY, uploadOne, {
-      shouldContinue: () => !hardUploadStop,
-    });
-    if (hardUploadStop) {
-      const attemptedIds = new Set(
-        uploadResults.map((result) => (result && result.entry ? String(result.entry.id) : '')),
-      );
-      for (const downloadResult of successfulDownloads) {
-        if (attemptedIds.has(String(downloadResult.entry.id))) continue;
-        const skipped = createStageFailure(
-          downloadResult.entry,
-          'upload',
-          hardUploadStop.raw || hardUploadStop.message,
-          {
-            category: hardUploadStop.category,
-            userMessage: `Skipped after ${hardUploadStop.label || 'a hard upload failure'}: ${hardUploadStop.message}`,
-            retryable: false,
-            suggestedFix: hardUploadStop.suggestedFix,
-          },
-        );
-        skipped.skipped = true;
-        uploadResults.push(skipped);
-      }
-    }
-    if (_isCancelled) sendStatusMessage('Run canceled after current upload finished');
+    uploadResults = await runWithConcurrency(successfulDownloads, UPLOAD_CONCURRENCY, uploadOne);
   }
 
-  const uploadResultByEntryId = new Map(
-    (uploadResults || []).map((u) => [String(u.entry && u.entry.id), u]),
-  );
+  // Process results
   for (const downloadResult of downloadResults) {
     const entry = downloadResult.entry;
-    verboseOutputMessage += `\n--- Processing: ${entry.name} (ID: ${entry.id}) ---\n`;
+    verboseOutputMessage += `\n--- Asset: ${entry.name} (ID: ${entry.id}) ---\n`;
     if (downloadResult.success) {
       downloadedSuccessfullyCount++;
       verboseOutputMessage += `✓ Downloaded: ${entry.name} (ID: ${entry.id}) to ${downloadResult.filePath}\n`;
+
+      // Only process upload results if not in download-only mode
       if (!data.downloadOnly) {
-        const uploadResult = uploadResultByEntryId.get(String(entry.id));
+        const uploadResult = uploadResults.find((u) => u.entry.id === entry.id);
         if (uploadResult) {
           if (uploadResult.success) {
             successfulUploadCount++;
@@ -2898,7 +1192,7 @@ ${rejectedText}`
       }
     } else {
       console.error(`[DOWNLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${downloadResult.error}`);
-      verboseOutputMessage += `✗ Download Failed: ${entry.name} (ID: ${entry.id}) - ${downloadResult.error}\n`;
+      verboseOutputMessage += `✗ Download Failed: ${entry.name} (ID: ${entry.id}) — ${downloadResult.error}\n`;
     }
   }
 
@@ -2911,60 +1205,31 @@ ${rejectedText}`
 
   try {
     if (data.downloadOnly) {
-      sendStatusMessage('Run complete - see Run Report');
+      sendStatusMessage(
+        `Download Complete: ${downloadedSuccessfullyCount}/${animationEntries.length} files saved to ${downloadsDir}`,
+      );
     } else {
-      sendStatusMessage('Run complete - see Run Report');
+      sendStatusMessage(
+        `Operation Successful: ${successfulUploadCount}/${animationEntries.length}`,
+      );
     }
   } catch (e) {
     if (DEVELOPER_MODE) console.warn('(Dev) Failed to send final status message', e);
   }
 
-  const finishedAt = new Date().toISOString();
-  const durationSeconds = Math.max(
-    0,
-    Math.round((Date.now() - new Date(session.startedAt || Date.now()).getTime()) / 1000),
-  );
+  // Build concise run summary (counts, failures)
   const downloadFailures = downloadResults
     .filter((r) => !r.success)
-    .map((r) => {
-      const classified = classifyError(r.rawError || r.error || 'Unknown error');
-      return {
-        id: r.entry.id,
-        name: r.entry.name,
-        creator: `${r.entry.creatorType}:${r.entry.creatorId}`,
-        stage: r.stage || 'download',
-        reason: r.error || classified.message,
-        category: r.errorCategory || classified.category,
-        label: r.errorLabel || classified.label,
-        raw: r.rawError || classified.raw,
-        retryable: r.retryable === true,
-        suggestedFix: r.suggestedFix || classified.suggestedFix,
-      };
-    });
+    .map((r) => ({ id: r.entry.id, name: r.entry.name, reason: r.error || 'Unknown error' }));
   const uploadFailures = data.downloadOnly
     ? []
     : (uploadResults || [])
         .filter((u) => !u.success)
-        .map((u) => {
-          const classified = classifyError(u.rawError || u.error || 'Unknown error');
-          return {
-            id: u.entry.id,
-            name: u.entry.name,
-            creator: `${u.entry.creatorType}:${u.entry.creatorId}`,
-            stage: u.stage || 'upload',
-            reason: u.error || classified.message,
-            category: u.errorCategory || classified.category,
-            label: u.errorLabel || classified.label,
-            raw: u.rawError || classified.raw,
-            retryable: u.retryable === true,
-            suggestedFix: u.suggestedFix || classified.suggestedFix,
-          };
-        });
+        .map((u) => ({ id: u.entry.id, name: u.entry.name, reason: u.error || 'Unknown error' }));
+
+  // Detect rate-limit failures
   const rateLimitFailures = uploadFailures.filter(
-    (f) =>
-      f.category === 'rate_limited' ||
-      (f.reason || '').includes('429') ||
-      (f.reason || '').includes('Rate limit'),
+    (f) => (f.reason || '').includes('429') || (f.reason || '').includes('Rate limit'),
   );
 
   const skippedUploadsCount = data.downloadOnly ? 0 : downloadFailures.length;
@@ -2974,10 +1239,7 @@ ${rejectedText}`
     const maxItems = 5;
     const lines = items
       .slice(0, maxItems)
-      .map(
-        (it) =>
-          `- ${it.name} (ID: ${it.id}) - ${it.label || it.category ? `[${it.label || it.category}] ` : ''}${it.reason}${it.suggestedFix ? ` (${it.suggestedFix})` : ''}`,
-      );
+      .map((it) => `- ${it.name} (ID: ${it.id}) — ${it.reason}`);
     const remaining = items.length - maxItems;
     return `${label}:\n${lines.join('\n')}${remaining > 0 ? `\n(+${remaining} more…)` : ''}\n`;
   };
@@ -2991,33 +1253,26 @@ ${rejectedText}`
       ? `Uploaded: ${successfulUploadCount}/${downloadResults.filter((r) => r.success).length}${uploadFailures.length ? ` (Failed: ${uploadFailures.length}, Skipped: ${skippedUploadsCount})` : skippedUploadsCount ? ` (Skipped: ${skippedUploadsCount})` : ''}\n`
       : '');
 
-  const groupedFailureCounts = [...downloadFailures, ...uploadFailures].reduce((acc, failure) => {
-    const key = failure.category || 'Unknown error';
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  if (Object.keys(groupedFailureCounts).length > 0) {
-    runSummary +=
-      `\nFailure groups:\n` +
-      Object.entries(groupedFailureCounts)
-        .map(([category, count]) => `- ${count} ${category}`)
-        .join('\n') +
-      `\n`;
-  }
+  // Add top failure details (bounded) for quick inspection
   if (downloadFailures.length) {
     runSummary += `\n` + listFailures('Download failures', downloadFailures);
   }
   if (!data.downloadOnly && uploadFailures.length) {
     runSummary += `\n` + listFailures('Upload failures', uploadFailures);
   }
+
+  // Add rate-limit guidance if detected
   if (rateLimitFailures.length > 0) {
     const suggestedDelay = Math.min(Math.max(UPLOAD_RETRY_DELAY_MS * 2, 10000), 60000);
-    runSummary += `\nRATE LIMIT DETECTED (429): ${rateLimitFailures.length} upload(s) hit rate limits.\n`;
+    runSummary += `\n⚠️ RATE LIMIT DETECTED (429): ${rateLimitFailures.length} upload(s) hit rate limits.\n`;
     runSummary += `   Recommendation: Try again with higher "Retry Delay" (current: ${UPLOAD_RETRY_DELAY_MS}ms, suggested: ${suggestedDelay}ms)\n`;
     runSummary += `   Or increase "Upload Retries" for more attempts.\n`;
   }
+
+  // Output with mappings only (or download summary for download-only mode)
   let finalOutput = '';
   if (data.downloadOnly) {
+    // Download-only mode: show list of downloaded files
     const successfulDownloadsList = downloadResults
       .filter((r) => r.success)
       .map((r) => `${r.entry.name} (ID: ${r.entry.id})`)
@@ -3031,8 +1286,10 @@ ${rejectedText}`
   } else if (uploadMappingOutput.trim()) {
     finalOutput = uploadMappingOutput.trim().replace(/,$/, '');
   } else {
-    if (downloadedSuccessfullyCount > 0 && successfulUploadCount === 0) {
+    if (downloadedSuccessfullyCount > 0 && csrfToken && successfulUploadCount === 0) {
       finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}), but no ${isSoundMode ? 'sounds' : 'animations'} were successfully uploaded.`;
+    } else if (downloadedSuccessfullyCount > 0 && !csrfToken) {
+      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}). Uploads skipped (CSRF token missing).`;
     } else if (animationEntries.length > 0) {
       finalOutput = hasAuthError
         ? 'Authentication failed. Please check your Roblox cookie.'
@@ -3041,6 +1298,8 @@ ${rejectedText}`
       finalOutput = 'No operations performed.';
     }
   }
+
+  // Print final summary to console for quick inspection
   try {
     if (DEVELOPER_MODE) {
       console.log('(Dev) Run Summary:\n' + runSummary);
@@ -3049,98 +1308,15 @@ ${rejectedText}`
     }
   } catch {}
 
-  const failedEntriesForRetry = dedupeAssetEntries([
-    ...downloadFailures
-      .map((failure) => animationEntries.find((entry) => String(entry.id) === String(failure.id)))
-      .filter(Boolean),
-    ...uploadFailures
-      .map((failure) => animationEntries.find((entry) => String(entry.id) === String(failure.id)))
-      .filter(Boolean),
-  ]);
-  const failedAnimationIdInput = failedEntriesForRetry.map(formatAssetEntry).join('\n');
-
-  if (failedEntriesForRetry.length > 0) {
-    session.status = 'incomplete';
-    session.lastUpdatedAt = new Date().toISOString();
-    const failuresById = new Map(
-      [...downloadFailures, ...uploadFailures].map((failure) => [String(failure.id), failure]),
-    );
-    session.failedEntries = failedEntriesForRetry.map((entry) => {
-      const failure = failuresById.get(String(entry.id)) || {};
-      return {
-        id: String(entry.id),
-        name: entry.name,
-        creatorType: entry.creatorType,
-        creatorId: String(entry.creatorId),
-        stage: failure.stage || 'unknown',
-        category: failure.category || 'unknown',
-        label: failure.label || '',
-        reason: failure.reason || '',
-        retryable: failure.retryable === true,
-        suggestedFix: failure.suggestedFix || '',
-      };
-    });
-    session.retryAnimationIdInput = failedAnimationIdInput;
-    session.totalCount = animationEntries.length;
-    await persistSession({ force: true });
-  } else {
-    session.status = 'complete';
-    cancelPendingSessionSave();
-    await sessionSaveBuffer.settle();
-    await clearSession();
-  }
-
-  await persistAssetHistory({ force: true });
-
   sendSpooferResultToRenderer({
     output: finalOutput,
     success: downloadedSuccessfullyCount > 0 || successfulUploadCount > 0,
-    failedAnimationIdInput,
-    failedCount: failedEntriesForRetry.length,
-    summary: {
-      total: animationEntries.length + cachedHistoryMappings.length,
-      downloaded: downloadedSuccessfullyCount,
-      uploaded: successfulUploadCount,
-      downloadFailures: downloadFailures.length,
-      uploadFailures: uploadFailures.length,
-      cached: cachedHistoryMappings.length,
-      skippedUploads: skippedUploadsCount,
-      downloadOnly: !!data.downloadOnly,
-      mode: data.downloadOnly ? 'Download-Only' : 'Download + Upload',
-      startedAt: session.startedAt,
-      finishedAt,
-      durationSeconds,
-      failureCategories: [...downloadFailures, ...uploadFailures].reduce((acc, f) => {
-        acc[f.category || 'Unknown error'] = (acc[f.category || 'Unknown error'] || 0) + 1;
-        return acc;
-      }, {}),
-      failures: [...downloadFailures, ...uploadFailures],
-      stageFailures: [
-        ...summarizeStageFailures(downloadResults, 'download'),
-        ...summarizeStageFailures(uploadResults, 'upload'),
-      ],
-      performance: stageMetrics.summary(),
-      mappings: (uploadMappingOutput || '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean),
-      successfulMappings: (uploadResults || [])
-        .filter((item) => item && item.success && item.assetId && item.entry)
-        .map((item) => ({
-          name: item.entry.name,
-          originalId: item.entry.id,
-          newId: item.assetId,
-          creator: `${item.entry.creatorType}:${item.entry.creatorId}`,
-          assetType: assetTypeName,
-        })),
-      cachedMappings: cachedHistoryMappings.map((item) => ({
-        name: item.entry.name,
-        originalId: item.entry.id,
-        newId: item.newId,
-        savedAt: item.savedAt || '',
-      })),
-    },
   });
+
+  // Clear session on completion (all done or all failed — no point resuming)
+  await clearSession();
+
+  // Clear downloads directory after operation completes (only if using temp directory, not user-selected folder)
   if (!data.downloadOnly) {
     try {
       await clearDownloadsDirectory(downloadsDir, false);

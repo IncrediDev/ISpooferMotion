@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Uploads release files to VirusTotal when a key is configured, then writes links for the release notes.
+
 'use strict';
 
 const crypto = require('crypto');

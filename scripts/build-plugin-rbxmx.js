@@ -1,7 +1,5 @@
 'use strict';
 
-// Builds the Roblox plugin file from the Lua source. Keep paths explicit so release checks can catch missing files.
-
 const fs = require('fs');
 const path = require('path');
 

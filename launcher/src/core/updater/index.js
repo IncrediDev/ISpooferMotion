@@ -24,23 +24,42 @@ function getSourceDisplayName(source) {
   return `${source.label} - ${source.owner}/${source.repo}`;
 }
 
+const VERSION_PATTERN = /v?\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?/i;
+
 function getVersionFromNameOrTag(value) {
-  const match = String(value || '').match(/v?\d+\.\d+\.\d+/i);
+  const match = String(value || '').match(VERSION_PATTERN);
   if (!match) return null;
-  return match[0].startsWith('v') ? match[0] : `v${match[0]}`;
+  return /^v/i.test(match[0]) ? match[0] : `v${match[0]}`;
+}
+
+function getMetadataRevision(value, isPrerelease = false) {
+  const metadata = String(value || '').trim().toLowerCase();
+  if (!metadata) return 0;
+
+  const namedRevision = metadata.match(
+    /(?:^|[.-])(?:hotfix|hf|patch|rev|revision|build)[.-]?(\d+)?(?:$|[.-])/,
+  );
+  if (namedRevision) return Number(namedRevision[1] || 1);
+
+  if (/^\d+$/.test(metadata)) return Number(metadata);
+  return isPrerelease ? -1 : 0;
 }
 
 function parseVersionParts(value) {
-  const match = String(value || '').match(/v?(\d+)\.(\d+)\.(\d+)/i);
+  const match = String(value || '').match(
+    /v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?(?:\+([0-9A-Za-z][0-9A-Za-z.-]*))?/i,
+  );
   if (!match) return null;
-  return match.slice(1).map((part) => Number(part));
+  const parts = match.slice(1, 4).map((part) => Number(part));
+  parts.push(getMetadataRevision(match[5]) || getMetadataRevision(match[4], true));
+  return parts;
 }
 
 function compareVersions(a, b) {
   const left = parseVersionParts(a);
   const right = parseVersionParts(b);
   if (!left || !right) return 0;
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < 4; i += 1) {
     if (left[i] > right[i]) return 1;
     if (left[i] < right[i]) return -1;
   }

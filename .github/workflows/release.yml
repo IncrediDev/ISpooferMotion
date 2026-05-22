@@ -58,12 +58,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          node-version: 20.19.5
 
       - name: Install app dependencies
-        run: npm ci
+        run: node scripts/ci-install.js
+
+      - name: Rebuild native app dependencies
+        run: npm run rebuild:native
 
       - name: Run tests
         run: npm test
@@ -88,13 +89,11 @@ jobs:
       - name: Setup Node.js cache for launcher
         uses: actions/setup-node@v5
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: launcher/package-lock.json
+          node-version: 20.19.5
 
       - name: Install launcher dependencies
         working-directory: launcher
-        run: npm ci
+        run: node ../scripts/ci-install.js
 
       - name: Build launcher setup EXE
         working-directory: launcher
