@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('launcherPopupAPI', {
+  ready: (id) => ipcRenderer.send('launcher:popup-ready', String(id || '')),
   onInit: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = (_event, payload) => callback(payload);

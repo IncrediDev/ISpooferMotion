@@ -1,6 +1,10 @@
 name: Build Launcher Setup
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -22,13 +26,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: launcher/package-lock.json
+          node-version: 20.19.5
 
       - name: Install launcher dependencies
         working-directory: launcher
-        run: npm ci
+        run: node ../scripts/ci-install.js
 
       - name: Build launcher setup
         working-directory: launcher

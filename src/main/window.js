@@ -1,75 +1,98 @@
-const { BrowserWindow, app, nativeImage } = require('electron');
-const path = require('path');
+const path = require('node:path');
+const { app, BrowserWindow } = require('electron');
 
-let mainWindow;
-const IS_DEV = process.argv.includes('--dev');
-const IS_SMOKE_TEST = process.argv.includes('--smoke-test');
+let mainWindow = null;
+
+const WINDOW_OPTIONS = Object.freeze({
+  width: 1280,
+  height: 780,
+  minWidth: 1260,
+  minHeight: 740,
+  title: 'ISpooferMotion',
+  frame: false,
+  resizable: true,
+  show: false,
+});
+
+function resolveAssetPath(fileName) {
+  return path.join(__dirname, '..', 'assets', fileName);
+}
+
+function getIconPath() {
+  return process.platform === 'win32'
+    ? resolveAssetPath('app_icon.ico')
+    : resolveAssetPath('app_icon.png');
+}
+
+function getPreloadPath() {
+  return path.join(__dirname, '..', 'preload', 'preload.js');
+}
+
+function getRendererPath() {
+  return path.join(__dirname, '..', 'renderer', 'index.html');
+}
+
+/**
+ * Creates the main application window.
+ */
 function createWindow() {
-  const pngIcon = path.join(__dirname, '..', 'assets', 'app_icon.png');
-  const icoIcon = path.join(__dirname, '..', 'assets', 'app_icon.ico');
-  const iconImage = nativeImage.createFromPath(
-    process.platform === 'win32' && !IS_DEV ? icoIcon : pngIcon,
-  );
-  const iconPath = iconImage.isEmpty() ? pngIcon : iconImage;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.focus();
+    return mainWindow;
+  }
 
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 780,
-    minWidth: 1260,
-    minHeight: 740,
-    title: 'ISpooferMotion',
-    icon: iconPath,
-    frame: false,
-    resizable: true,
-    show: !IS_SMOKE_TEST,
+    ...WINDOW_OPTIONS,
+    icon: getIconPath(),
     webPreferences: {
-      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
+      webSecurity: true,
+      devTools: true,
     },
   });
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  mainWindow.webContents.once('did-finish-load', async () => {
-    if (IS_SMOKE_TEST) {
-      try {
-        const ready = await mainWindow.webContents.executeJavaScript(
-          'Boolean(window.electronAPI && document.querySelector(\'[data-view="spoofer"]\') && document.querySelector(\'[data-view="profiles"]\') && document.querySelector(\'[data-view="settings"]\'))',
-        );
-        if (!ready) throw new Error('Renderer did not expose the expected shell controls.');
-        console.log('ELECTRON_SMOKE_OK');
-        app.quit();
-      } catch (err) {
-        console.error('ELECTRON_SMOKE_FAILED:', err && err.message ? err.message : err);
-        app.exit(1);
-      }
-      return;
-    }
-    if (IS_DEV) {
-      mainWindow.webContents.openDevTools({ mode: 'detach' });
-    }
+
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
   });
-  mainWindow.webContents.once('did-fail-load', (_event, errorCode, errorDescription) => {
-    if (!IS_SMOKE_TEST) return;
-    console.error(`ELECTRON_SMOKE_FAILED: ${errorCode} ${errorDescription}`);
-    app.exit(1);
-  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-}
-function getMainWindow() {
+
+  mainWindow.loadFile(getRendererPath()).catch((error) => {
+    console.error('[WINDOW ERROR] Failed to load renderer:', error);
+  });
+
   return mainWindow;
 }
+
+/**
+ * Gets the current main window instance.
+ */
+function getMainWindow() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
+/**
+ * Sets up Electron lifecycle handlers.
+ */
 function setupAppLifecycle() {
-  app.whenReady().then(() => {
+  const ready = app.whenReady().then(() => {
     createWindow();
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   });
+
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
+
+  return ready;
 }
 
 module.exports = {

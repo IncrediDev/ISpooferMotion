@@ -113,6 +113,8 @@ window.launcherPopupAPI.onInit((payload = {}) => {
   }
 });
 
+window.launcherPopupAPI.ready(new URLSearchParams(window.location.search).get('id') || '');
+
 // Handle live progress updates (sent from main process during download)
 window.launcherPopupAPI.onProgress((payload = {}) => {
   if (payload.message) setText('message', payload.message);

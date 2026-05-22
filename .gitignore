@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
 launcher/node_modules/
+.npm-cache/
+launcher/.npm-cache/
 
 # Build output
 dist/

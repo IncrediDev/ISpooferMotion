@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, dialog, nativeImage } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -37,6 +37,7 @@ const DEFAULT_RELEASE_SOURCE_ID = updater.DEFAULT_RELEASE_SOURCE_ID;
 const USER_AGENT = `ISpooferMotion-Electron-Launcher/${app.getVersion()} (+https://github.com/IncrediDev/ISpooferMotion)`;
 const REQUEST_TIMEOUT_MS = 30000;
 const DOWNLOAD_TIMEOUT_MS = 90000;
+const POPUP_READY_TIMEOUT_MS = 4000;
 const MAX_REDIRECTS = 5;
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024;
@@ -100,6 +101,31 @@ function getWindowIcon() {
   return image.isEmpty() ? preferred : image;
 }
 
+async function showNativePopupFallback(options = {}, reason = '') {
+  if (reason) writeLog(`Launcher popup fallback: ${reason}`);
+  const buttons =
+    options.buttons && options.buttons.length
+      ? options.buttons
+      : [{ id: 'ok', label: 'OK', kind: 'primary' }];
+  const result = await dialog.showMessageBox({
+    type: options.type === 'error' ? 'error' : options.type === 'warn' ? 'warning' : 'info',
+    title: options.title || 'ISpooferLauncher',
+    message: options.message || 'ISpooferMotion',
+    detail: options.detail || '',
+    buttons: buttons.map((button) => button.label || 'OK'),
+    defaultId: Math.max(
+      0,
+      buttons.findIndex((button) => button.kind === 'primary'),
+    ),
+    cancelId: Math.max(
+      0,
+      buttons.findIndex((button) => button.id === 'ok'),
+    ),
+    noLink: true,
+  });
+  return (buttons[result.response] && buttons[result.response].id) || 'ok';
+}
+
 function normalizeReleaseSourceId(sourceId) {
   return updater.normalizeReleaseSourceId(sourceId, RELEASE_SOURCES, DEFAULT_RELEASE_SOURCE_ID);
 }
@@ -108,6 +134,9 @@ function showLauncherPopup(options = {}) {
   return new Promise((resolve) => {
     const id = `popup-${Date.now()}-${++popupCounter}`;
     const type = options.type || 'info';
+    const popupHtml = path.join(POPUP_DIR, 'popup.html');
+    let settled = false;
+    let readyTimer = null;
     const popup = new BrowserWindow({
       width: 560,
       height: type === 'error' ? 312 : 282,
@@ -126,14 +155,37 @@ function showLauncherPopup(options = {}) {
         sandbox: true,
       },
     });
-    popupWindows.set(id, { window: popup, resolve });
-    popup.once('closed', () => {
+
+    function cleanup() {
+      if (readyTimer) clearTimeout(readyTimer);
+      ipcMain.off('launcher:popup-ready', handlePopupReady);
+    }
+
+    function finish(action) {
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (popupWindows.has(id)) {
         popupWindows.delete(id);
-        resolve('close');
       }
-    });
-    popup.webContents.once('did-finish-load', () => {
+      resolve(action || 'ok');
+    }
+
+    function fallback(reason) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      popupWindows.delete(id);
+      try {
+        if (!popup.isDestroyed()) popup.close();
+      } catch {}
+      showNativePopupFallback(options, reason)
+        .then((action) => resolve(action))
+        .catch(() => resolve('ok'));
+    }
+
+    function handlePopupReady(event, readyId) {
+      if (readyId !== id || event.sender !== popup.webContents || settled) return;
       popup.webContents.send('popup:init', {
         id,
         type,
@@ -144,8 +196,23 @@ function showLauncherPopup(options = {}) {
       });
       popup.show();
       popup.focus();
+    }
+
+    popupWindows.set(id, { window: popup, resolve: finish });
+    ipcMain.on('launcher:popup-ready', handlePopupReady);
+    popup.once('closed', () => finish('close'));
+    popup.webContents.once('did-fail-load', (_event, code, description) => {
+      fallback(`failed to load popup HTML (${code}): ${description}`);
     });
-    popup.loadFile(path.join(POPUP_DIR, 'popup.html'));
+    popup.webContents.once('render-process-gone', (_event, details) => {
+      fallback(`popup renderer stopped: ${details.reason || 'unknown'}`);
+    });
+    readyTimer = setTimeout(() => {
+      fallback('popup renderer did not become ready');
+    }, POPUP_READY_TIMEOUT_MS);
+    popup.loadFile(popupHtml, { query: { id } }).catch((err) => {
+      fallback(`failed to open popup HTML: ${err && err.message ? err.message : err}`);
+    });
   });
 }
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Build helper for local/release packaging.
 'use strict';
 
 const { spawnSync } = require('child_process');

@@ -1,0 +1,42 @@
+name: Build Roblox Plugin
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-plugin:
+    name: Roblox plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20.19.5
+
+      - name: Install dependencies
+        run: node scripts/ci-install.js
+
+      - name: Build Roblox Studio plugin
+        run: npm run build:plugin
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ISpooferMotion-Roblox-Plugin
+          path: dist/*.rbxmx
+          if-no-files-found: error

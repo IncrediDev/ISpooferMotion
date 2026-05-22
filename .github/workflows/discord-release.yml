@@ -1,14 +1,12 @@
 name: Post Release to Discord
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
         description: 'Release tag to post'
         required: true
-        default: 'v1.3.0'
+        default: 'v1.3.10-hotfix.1'
 
 permissions:
   contents: read
@@ -51,6 +49,7 @@ jobs:
           RELEASE_NAME: ${{ steps.release_info.outputs.name }}
           RELEASE_URL: ${{ steps.release_info.outputs.url }}
           RELEASE_PRERELEASE: ${{ steps.release_info.outputs.prerelease }}
+          RELEASE_EVENT_ACTION: ${{ github.event.action }}
           DISCORD_RELEASE_ROLE_ID: '1457029900291670210'
         run: |
           python3 <<'PY'
@@ -67,7 +66,10 @@ jobs:
           release_name = os.environ.get("RELEASE_NAME", "").strip() or release_tag
           release_url = os.environ.get("RELEASE_URL", "").strip()
           prerelease = os.environ.get("RELEASE_PRERELEASE") == "true"
+          event_action = os.environ.get("RELEASE_EVENT_ACTION", "").strip()
+          is_release_edit = event_action == "edited"
           role_id = os.environ.get("DISCORD_RELEASE_ROLE_ID", "").strip()
+          release_record_cache = None
 
           if not webhook_url:
               raise RuntimeError("Missing DISCORD_RELEASE_WEBHOOK secret.")
@@ -88,10 +90,14 @@ jobs:
                   return json.loads(response.read().decode("utf-8"))
 
           def get_release_by_tag():
+              global release_record_cache
+              if release_record_cache is not None:
+                  return release_record_cache
               if not repo or not release_tag or not github_token:
                   return {}
               try:
-                  return github_api(f"/repos/{repo}/releases/tags/{release_tag}")
+                  release_record_cache = github_api(f"/repos/{repo}/releases/tags/{release_tag}")
+                  return release_record_cache
               except Exception:
                   return {}
 
@@ -205,6 +211,35 @@ jobs:
               section = changelog[start:end].strip()
               return section or "No changelog entries were found for this version."
 
+          def sanitize_release_changes(text):
+              lines = text.splitlines()
+              kept = []
+              skipping = False
+              saw_content = False
+              release_title_pattern = rf"^\s{{0,3}}#{{1,6}}\s+ISpooferMotion\s+{re.escape(release_tag)}\s*$"
+              for line in lines:
+                  if not saw_content and not line.strip():
+                      continue
+                  if not saw_content and re.match(release_title_pattern, line, flags=re.IGNORECASE):
+                      saw_content = True
+                      continue
+                  saw_content = True
+                  if re.match(r"^\s{0,3}#{1,6}\s+VirusTotal results\b", line, flags=re.IGNORECASE):
+                      skipping = True
+                      continue
+                  if skipping and re.match(r"^\s{0,3}#{1,6}\s+", line):
+                      skipping = False
+                  if not skipping:
+                      kept.append(line)
+              return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+          def read_release_changes():
+              release = get_release_by_tag()
+              release_body = sanitize_release_changes(release.get("body") or "")
+              if release_body:
+                  return release_body
+              return sanitize_release_changes(read_version_changelog())
+
           def get_commit_author():
               fallback = {"name": "GitHub", "url": release_url, "avatar": None}
               if not repo or not github_token:
@@ -222,27 +257,30 @@ jobs:
                   "avatar": github_author.get("avatar_url"),
               }
 
-          changelog_text = read_version_changelog()
+          changelog_text = read_release_changes()
           virustotal_links = read_virustotal_links()
           author = get_commit_author()
 
-          changelog_field = f"Too much changed to fit cleanly here.\n\n[Read the full changelog]({release_url})" if len(changelog_text) > 1000 else changelog_text
-          release_type = "Pre-release" if prerelease else "Stable release"
-          color = 16753920 if prerelease else 5763719
-          headline = "New test build is ready" if prerelease else "New update is live"
+          changelog_field = f"Too much changed to fit cleanly here.\n\n[Read the release notes]({release_url})" if len(changelog_text) > 1000 else changelog_text
+          color = 3447003 if is_release_edit else (16753920 if prerelease else 5763719)
+          headline = "Release notes were updated" if is_release_edit else ("New test build is ready" if prerelease else "New update is live")
+          description = (
+              "The GitHub release notes were updated. Open the release below to see the latest changes."
+              if is_release_edit
+              else "ISpooferMotion has been updated. Grab the latest release from GitHub below."
+          )
 
           embed = {
               "author": {"name": f"Released by {author['name']}", "url": author["url"]},
-              "title": f"🚀 ISpooferMotion {release_tag}",
+              "title": f"ISpooferMotion {release_tag}",
               "url": release_url,
-              "description": f"**{headline}**\n\nISpooferMotion has been updated. Grab the latest release from GitHub below.",
+              "description": f"**{headline}**\n\n{description}",
               "color": color,
               "fields": [
-                  {"name": "📦 Version", "value": f"`{release_tag}`", "inline": True},
-                  {"name": "🧪 Type", "value": release_type, "inline": True},
-                  {"name": "⬇️ Download", "value": f"[Open GitHub Release]({release_url})", "inline": False},
-                  {"name": "🛡️ VirusTotal", "value": virustotal_links, "inline": False},
-                  {"name": "📝 Changelog", "value": changelog_field, "inline": False},
+                  {"name": "Version", "value": f"`{release_tag}`", "inline": True},
+                  {"name": "Download", "value": f"[Open GitHub Release]({release_url})", "inline": False},
+                  {"name": "VirusTotal", "value": virustotal_links, "inline": False},
+                  {"name": "Changes", "value": changelog_field, "inline": False},
               ],
               "footer": {"text": "ISpooferMotion update announcement"},
           }
@@ -253,9 +291,13 @@ jobs:
           payload = {
               "username": "ISpooferMotion Updates",
               "content": (
-                  f"<@&{role_id}> ISpooferMotion has updated! 🥳\n\n"
-                  "If you downloaded the **Setup .exe** instead of the standalone app, "
-                  "just relaunch the shortcut on your desktop to get the latest version."
+                  f"<@&{role_id}> ISpooferMotion release notes were updated.\n\n"
+                  if is_release_edit
+                  else (
+                      f"<@&{role_id}> ISpooferMotion has updated!\n\n"
+                      "If you downloaded the **Setup .exe** instead of the standalone app, "
+                      "just relaunch the shortcut on your desktop to get the latest version."
+                  )
               ),
               "allowed_mentions": {"roles": [role_id]},
               "embeds": [embed],

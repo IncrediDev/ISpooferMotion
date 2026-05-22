@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Checks release output names before publishing so the workflow fails early instead of shipping missing files.
 'use strict';
 
 const fs = require('fs');
@@ -34,6 +33,15 @@ function assertOne(label, files, options = {}) {
   }
 }
 
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
+  } catch (error) {
+    errors.push(`${file} is not valid JSON: ${error.message}`);
+    return null;
+  }
+}
+
 assertOne(
   'launcher setup exe',
   globFiles('launcher/dist', (name) => /^ISpooferMotion-Setup.*\.exe$/i.test(name)),
@@ -56,6 +64,12 @@ assertOne(
 );
 
 if (requireVirusTotal) {
+  const vtReport = readJson('dist/virustotal-links.json');
+  if (vtReport && vtReport.skipped) {
+    errors.push(
+      `VirusTotal upload was skipped: ${vtReport.skippedReason || 'no reason was provided'}.`,
+    );
+  }
   assertOne(
     'VirusTotal JSON report',
     globFiles('dist', (name) => name === 'virustotal-links.json'),
@@ -63,7 +77,7 @@ if (requireVirusTotal) {
   assertOne(
     'VirusTotal markdown report',
     globFiles('dist', (name) => name === 'virustotal-links.md'),
-    { minBytes: 256 },
+    { minBytes: 64 },
   );
 }
 

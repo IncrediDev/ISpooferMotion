@@ -1,301 +1,317 @@
-const os = require('os');
-const path = require('path');
-const { exec } = require('child_process');
+'use strict';
+
+const os = require('node:os');
+const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const keytar = require('keytar');
-const fs = require('fs').promises;
+const fs = require('node:fs/promises');
 const { DEVELOPER_MODE, buildRobloxCookieHeader } = require('./common');
 
-function isAbortLikeError(error) {
-  return !!(error && (error.name === 'AbortError' || error.code === 'ABORT_ERR'));
+const execFileAsync = promisify(execFile);
+const ROBLOX_COOKIE_PATTERN =
+  /_\|WARNING:-DO-NOT-SHARE-THIS\.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items\.\|_[A-F\d]+/i;
+const ROBLOX_STUDIO_COOKIE_TARGET = 'https://www.roblox.com:RobloxStudioAuth.ROBLOSECURITY';
+const ROBLOX_USER_AGENT = 'RobloxStudio/WinInet';
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+function debugLog(...args) {
+  if (DEVELOPER_MODE) console.log(...args);
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 15000, label = 'request') {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+function debugWarn(...args) {
+  if (DEVELOPER_MODE) console.warn(...args);
+}
+
+function asPositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function withTimeout(options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  if (typeof AbortSignal?.timeout !== 'function') return options;
+  return { ...options, signal: options.signal || AbortSignal.timeout(timeoutMs) };
+}
+
+async function readResponseText(response, maxLength = 300) {
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return (await response.text()).slice(0, maxLength);
+  } catch {
+    return '';
+  }
+}
+
+async function readJsonResponse(response, context) {
+  let data;
+
+  try {
+    data = await response.json();
   } catch (err) {
-    if (isAbortLikeError(err))
-      throw new Error(`${label} timed out after ${Math.max(1000, timeoutMs)}ms`);
-    throw err;
-  } finally {
-    clearTimeout(timeout);
+    const body = await readResponseText(response);
+    throw new Error(`${context} returned invalid JSON${body ? `: ${body}` : ''}`, { cause: err });
   }
+
+  if (!data || typeof data !== 'object') {
+    throw new Error(`${context} returned an invalid response shape`);
+  }
+
+  return data;
 }
 
-async function readJsonWithTimeout(response, timeoutMs = 10000, label = 'response') {
-  let timeout;
-  try {
-    return await Promise.race([
-      response.json(),
-      new Promise((_, reject) => {
-        timeout = setTimeout(
-          () =>
-            reject(new Error(`${label} JSON read timed out after ${Math.max(1000, timeoutMs)}ms`)),
-          Math.max(1000, timeoutMs),
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
+function extractRobloxCookie(rawValue) {
+  if (!rawValue) return undefined;
+
+  const text = Buffer.isBuffer(rawValue) ? rawValue.toString('latin1') : String(rawValue);
+
+  return text.match(ROBLOX_COOKIE_PATTERN)?.[0];
 }
 
-async function readTextWithTimeout(response, timeoutMs = 10000, label = 'response') {
-  let timeout;
-  try {
-    return await Promise.race([
-      response.text(),
-      new Promise((_, reject) => {
-        timeout = setTimeout(
-          () =>
-            reject(new Error(`${label} text read timed out after ${Math.max(1000, timeoutMs)}ms`)),
-          Math.max(1000, timeoutMs),
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
+function buildCreatorGamesUrl(creatorType, creatorId, cursor, limit) {
+  const normalizedCreatorType = String(creatorType || '').toLowerCase();
+  const normalizedCreatorId = String(creatorId || '').trim();
+
+  if (!/^\d+$/.test(normalizedCreatorId)) {
+    throw new Error('Creator ID must be numeric');
   }
+
+  const url =
+    normalizedCreatorType === 'group'
+      ? new URL(`https://games.roblox.com/v2/groups/${normalizedCreatorId}/games`)
+      : new URL(`https://games.roblox.com/v2/users/${normalizedCreatorId}/games`);
+
+  url.searchParams.set('limit', String(limit));
+  if (normalizedCreatorType !== 'group') url.searchParams.set('sortOrder', 'Asc');
+  if (cursor) url.searchParams.set('cursor', String(cursor));
+
+  return url;
 }
+
+function getRootPlaceId(game) {
+  if (!game || typeof game !== 'object') return null;
+  const candidate = game.rootPlace?.id ?? game.rootPlaceId ?? game.placeId ?? game.id;
+  return candidate == null ? null : String(candidate);
+}
+
+/**
+ * Retrieves Roblox cookie from Roblox Studio or Windows Credential Manager.
+ */
 async function getCookieFromRobloxStudio(userId = null) {
   if (!['darwin', 'win32'].includes(process.platform)) return undefined;
 
   if (process.platform === 'darwin') {
     try {
-      const homePath = os.homedir();
       const cookieFile = path.join(
-        homePath,
+        os.homedir(),
         'Library/HTTPStorages/com.Roblox.RobloxStudio.binarycookies',
       );
-      const binaryCookieData = await fs.readFile(cookieFile, { encoding: 'utf-8' });
-      const matchGroups = binaryCookieData.match(
-        /_\|WARNING:-DO-NOT-SHARE-THIS\.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items\.\|_[A-F\d]+/,
-      );
-      return matchGroups?.[0];
+      const binaryCookieData = await fs.readFile(cookieFile);
+      return extractRobloxCookie(binaryCookieData);
     } catch (err) {
-      if (DEVELOPER_MODE)
-        console.warn('(Dev) Could not read Roblox cookie from binarycookies:', err.message);
+      debugWarn('(Dev) Could not read Roblox cookie from binarycookies:', err.message);
       return undefined;
     }
   }
 
-  if (process.platform === 'win32') {
-    try {
-      const stdout = await new Promise((resolve, reject) => {
-        exec('cmdkey /list', (error, stdout, stderr) => {
-          if (error) reject(error);
-          else resolve(stdout);
-        });
-      });
-      const lines = stdout.split('\n');
-      const robloxTargets = [];
-      for (const line of lines) {
-        if (line.includes('https://www.roblox.com:RobloxStudioAuth.ROBLOSECURITY')) {
-          const match = line.match(/Target:\s*LegacyGeneric:target=(.+)/);
-          if (match) robloxTargets.push(match[1]);
-        }
-      }
-      robloxTargets.sort((a, b) => {
-        const numA = parseInt(a.split('ROBLOSECURITY')[1]) || 0;
-        const numB = parseInt(b.split('ROBLOSECURITY')[1]) || 0;
+  try {
+    const { stdout } = await execFileAsync('cmdkey', ['/list'], {
+      windowsHide: true,
+      maxBuffer: 512 * 1024,
+    });
+
+    const requestedUserId = userId == null ? '' : String(userId).replace(/\D/g, '');
+    const targets = String(stdout)
+      .split(/\r?\n/)
+      .map((line) => line.match(/Target:\s*LegacyGeneric:target=(.+)/)?.[1]?.trim())
+      .filter(Boolean)
+      .filter((target) => target.includes(ROBLOX_STUDIO_COOKIE_TARGET))
+      .sort((a, b) => {
+        const aIncludesUser = requestedUserId && a.includes(requestedUserId) ? 1 : 0;
+        const bIncludesUser = requestedUserId && b.includes(requestedUserId) ? 1 : 0;
+        if (aIncludesUser !== bIncludesUser) return bIncludesUser - aIncludesUser;
+
+        const numA = Number.parseInt(a.split('ROBLOSECURITY')[1], 10) || 0;
+        const numB = Number.parseInt(b.split('ROBLOSECURITY')[1], 10) || 0;
         return numB - numA;
       });
-      for (const target of robloxTargets) {
-        try {
-          const token = await keytar.findPassword(target);
-          if (token) {
-            if (DEVELOPER_MODE) {
-              console.log(`(Dev) Using Roblox cookie from credential: ${target}`);
-            }
-            return token;
-          }
-        } catch (e) {}
+
+    for (const target of targets) {
+      try {
+        const token = await keytar.findPassword(target);
+        if (token) {
+          debugLog(`(Dev) Using Roblox cookie from credential: ${target}`);
+          return token;
+        }
+      } catch (err) {
+        debugWarn('(Dev) Could not read credential target:', target, err.message);
       }
-      return undefined;
-    } catch (err) {
-      if (DEVELOPER_MODE)
-        console.warn(
-          '(Dev) Could not read Roblox cookie from Windows Credential Manager:',
-          err.message,
-        );
-      return undefined;
     }
+  } catch (err) {
+    debugWarn('(Dev) Could not read Roblox cookie from Windows Credential Manager:', err.message);
   }
+
   return undefined;
 }
+
+/**
+ * Fetches CSRF token from Roblox auth endpoint.
+ */
 async function getCsrfToken(cookie) {
   const csrfUrl = 'https://auth.roblox.com/v2/logout';
   const cookieHeader = buildRobloxCookieHeader(cookie);
-  if (!cookieHeader) {
-    throw new Error('Missing or invalid ROBLOSECURITY cookie');
-  }
-  const csrfHeaders = { Cookie: cookieHeader, 'Content-Type': 'application/json' };
+
+  if (!cookieHeader) throw new Error('Missing or invalid ROBLOSECURITY cookie');
+
   let response;
   try {
-    response = await fetchWithTimeout(
+    response = await fetch(
       csrfUrl,
-      { method: 'POST', headers: csrfHeaders, body: JSON.stringify({}) },
-      12000,
-      'CSRF token request',
-    );
-  } catch (networkError) {
-    console.error('Network error fetching CSRF token:', networkError);
-    throw new Error(`Network error fetching CSRF token: ${networkError.message}`);
-  }
-  const token = response.headers.get('x-csrf-token');
-  if (!token) {
-    let errorDetails = `CSRF token endpoint (${csrfUrl}) returned status ${response.status}.`;
-    try {
-      const textBody = await readTextWithTimeout(response, 8000, 'CSRF token error response');
-      errorDetails += ` Body: ${textBody.substring(0, 200)}`;
-    } catch (e) {}
-    throw new Error(`No X-CSRF-TOKEN in response header. ${errorDetails}`);
-  }
-  return token;
-}
-async function getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds = 10) {
-  const limit = 50;
-
-  async function getGamesPage(url) {
-    const cookieHeader = buildRobloxCookieHeader(cookie);
-    if (!cookieHeader) {
-      throw new Error('Missing or invalid ROBLOSECURITY cookie');
-    }
-    const resp = await fetchWithTimeout(
-      url,
-      {
+      withTimeout({
+        method: 'POST',
         headers: {
           Cookie: cookieHeader,
-          'User-Agent': 'RobloxStudio/WinInet',
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+          'User-Agent': ROBLOX_USER_AGENT,
         },
-      },
-      12000,
-      'Creator games request',
+        body: '{}',
+      }),
     );
-    if (!resp.ok) {
-      const errorText = await readTextWithTimeout(resp, 8000, 'Creator games error response');
-      throw new Error(`Failed to get games (${resp.status}): ${errorText.substring(0, 200)}`);
-    }
-    const data = await readJsonWithTimeout(resp, 10000, 'Creator games response');
-    if (!data || !data.data) {
+  } catch (err) {
+    throw new Error(`Network error fetching CSRF token: ${err.message}`, { cause: err });
+  }
+
+  const token = response.headers.get('x-csrf-token');
+  if (!token) {
+    const body = await readResponseText(response, 200);
+    throw new Error(
+      `No X-CSRF-TOKEN in response header. CSRF endpoint returned ${response.status}${body ? `: ${body}` : ''}`,
+    );
+  }
+
+  return token;
+}
+
+/**
+ * Gets the rootPlace from each game the creator owns.
+ */
+async function getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds = 10) {
+  const limit = 50;
+  const maxResults = Math.min(asPositiveInteger(maxPlaceIds, 10), 100);
+  const cookieHeader = buildRobloxCookieHeader(cookie);
+
+  if (!cookieHeader) throw new Error('Missing or invalid ROBLOSECURITY cookie');
+
+  async function getGamesPage(url) {
+    const response = await fetch(
+      url,
+      withTimeout({
+        headers: {
+          Cookie: cookieHeader,
+          'User-Agent': ROBLOX_USER_AGENT,
+        },
+      }),
+    );
+
+    if (!response.ok) {
+      const errorText = await readResponseText(response, 300);
       throw new Error(
-        `Invalid response format. Response: ${JSON.stringify(data).substring(0, 200)}`,
+        `Failed to get games (${response.status})${errorText ? `: ${errorText}` : ''}`,
       );
     }
+
+    const data = await readJsonResponse(response, 'Games API');
+    if (!Array.isArray(data.data)) {
+      throw new Error(`Invalid games response format: ${JSON.stringify(data).slice(0, 200)}`);
+    }
+
     return data;
   }
 
-  let allGames = [];
+  const rootPlaces = [];
+  const seenPlaceIds = new Set();
   let cursor = null;
   let pagesRequested = 0;
-  while (allGames.length < maxPlaceIds) {
-    let url;
-    if (creatorType === 'group') {
-      url = `https://games.roblox.com/v2/groups/${creatorId}/games?limit=${limit}`;
-    } else {
-      url = `https://games.roblox.com/v2/users/${creatorId}/games?sortOrder=Asc&limit=${limit}`;
-    }
 
-    if (cursor) {
-      url += `&cursor=${encodeURIComponent(cursor)}`;
-    }
+  while (rootPlaces.length < maxResults) {
+    const url = buildCreatorGamesUrl(creatorType, creatorId, cursor, limit);
+    debugLog(`(Dev) Fetching games page from URL: ${url.toString()}`);
 
-    if (DEVELOPER_MODE) console.log(`(Dev) Fetching games page from URL: ${url}`);
     const pageData = await getGamesPage(url);
+    pagesRequested += 1;
 
-    if (!pageData.data || pageData.data.length === 0) {
-      if (DEVELOPER_MODE)
-        console.log(`(Dev) No games found on this page. Total collected: ${allGames.length}`);
+    if (pageData.data.length === 0) {
+      debugLog(`(Dev) No games found on this page. Total collected: ${rootPlaces.length}`);
       break;
     }
 
-    allGames = allGames.concat(pageData.data);
-    pagesRequested++;
-    if (DEVELOPER_MODE) {
-      console.log(
-        `(Dev) Page ${pagesRequested}: Got ${pageData.data.length} games (total: ${allGames.length})`,
-      );
-      pageData.data.forEach((game, idx) => {
-        if (game.rootPlace) {
-          console.log(`  Game ${idx}: "${game.name}" -> rootPlace ID: ${game.rootPlace.id}`);
-        } else {
-          console.log(
-            `  Game ${idx}: "${game.name}" -> NO rootPlace found (has keys: ${Object.keys(game).join(', ')})`,
-          );
-        }
-      });
+    for (const game of pageData.data) {
+      const placeId = getRootPlaceId(game);
+      if (!placeId || seenPlaceIds.has(placeId)) continue;
+
+      seenPlaceIds.add(placeId);
+      rootPlaces.push(placeId);
+      debugLog(`(Dev) Game "${game.name || 'Untitled'}" -> rootPlace ID: ${placeId}`);
+
+      if (rootPlaces.length >= maxResults) break;
     }
+
     if (!pageData.nextPageCursor) {
-      if (DEVELOPER_MODE) console.log(`(Dev) No more pages available`);
+      debugLog('(Dev) No more pages available');
       break;
     }
 
     cursor = pageData.nextPageCursor;
   }
-  const rootPlaces = allGames
-    .slice(0, maxPlaceIds)
-    .map((game) => {
-      if (game.rootPlace && game.rootPlace.id) {
-        return game.rootPlace.id;
-      } else if (game.id) {
-        return game.id;
-      }
-      return null;
-    })
-    .filter((id) => id !== null);
 
   if (rootPlaces.length === 0) {
-    if (DEVELOPER_MODE) {
-      console.log(`(Dev) No root places found. Game structure samples:`);
-      allGames.slice(0, 3).forEach((game, idx) => {
-        console.log(`  Game ${idx}:`, JSON.stringify(game, null, 2).substring(0, 200));
-      });
-    }
     throw new Error('No root places found in games');
   }
 
-  if (DEVELOPER_MODE)
-    console.log(
-      `(Dev) Got ${rootPlaces.length} root places from ${pagesRequested} page(s): ${rootPlaces.join(', ')}`,
-    );
-  return rootPlaces; // Return array of root place IDs from each game
+  debugLog(
+    `(Dev) Got ${rootPlaces.length} root places from ${pagesRequested} page(s): ${rootPlaces.join(', ')}`,
+  );
+  return rootPlaces;
 }
+
+/**
+ * Gets multiple place IDs from a creator to use as fallbacks.
+ */
 async function getMultiplePlaceIds(creatorType, creatorId, cookie, maxPlaceIds = 10) {
   try {
     const places = await getPlaceIdFromCreator(creatorType, creatorId, cookie, maxPlaceIds);
     return Array.isArray(places) ? places : [places];
   } catch (err) {
-    if (DEVELOPER_MODE) console.warn(`(Dev) Failed to get place IDs: ${err.message}`);
+    debugWarn('(Dev) Failed to get place IDs:', err.message);
     return [];
   }
 }
+
+/**
+ * Gets the authenticated user's ID from the Roblox API using their cookie.
+ */
 async function getAuthenticatedUserId(cookie) {
   const cookieHeader = buildRobloxCookieHeader(cookie);
   if (!cookieHeader) throw new Error('Missing or invalid ROBLOSECURITY cookie');
-  const response = await fetchWithTimeout(
+
+  const response = await fetch(
     'https://users.roblox.com/v1/users/authenticated',
-    {
-      headers: { Cookie: cookieHeader, 'User-Agent': 'RobloxStudio/WinInet' },
-    },
-    10000,
-    'Authenticated user request',
+    withTimeout({
+      headers: {
+        Cookie: cookieHeader,
+        'User-Agent': ROBLOX_USER_AGENT,
+      },
+    }),
   );
+
   if (!response.ok) {
-    let errorText = '';
-    try {
-      errorText = (await readTextWithTimeout(response, 8000, 'Authenticated user error response'))
-        .replace(/\s+/g, ' ')
-        .slice(0, 300);
-    } catch {}
+    const errorText = await readResponseText(response, 200);
     throw new Error(
       `Failed to get authenticated user ID (${response.status})${errorText ? `: ${errorText}` : ''}`,
     );
   }
-  const data = await readJsonWithTimeout(response, 8000, 'Authenticated user response');
+
+  const data = await readJsonResponse(response, 'Authenticated user API');
   if (!data.id) throw new Error('No user ID in authenticated user response');
+
   return String(data.id);
 }
 
