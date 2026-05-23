@@ -12,7 +12,10 @@ const jsonPath = path.join(outDir, 'virustotal-links.json');
 const markdownPath = path.join(outDir, 'virustotal-links.md');
 const apiKey = String(process.env.VIRUSTOTAL_API_KEY || '').trim();
 const releaseTag = String(process.env.RELEASE_TAG || 'release').trim();
-const assetPaths = process.argv.slice(2).map((value) => path.resolve(value));
+const allowedExtensions = ['.exe', '.rbxmx', '.dmg', '.zip', '.AppImage', '.deb'];
+const assetPaths = fs.readdirSync(outDir)
+  .filter(name => allowedExtensions.some(ext => name.endsWith(ext)))
+  .map(name => path.join(outDir, name));
 
 function sha256File(filePath) {
   const digest = crypto.createHash('sha256');
@@ -31,7 +34,7 @@ function writeReport(rows, skippedReason = '') {
   };
   fs.writeFileSync(jsonPath, `${JSON.stringify(output, null, 2)}\n`, 'utf8');
 
-  const lines = [`# VirusTotal results for ${releaseTag}`, ''];
+  const lines = [`### VirusTotal Scan Results`, ''];
 
   if (skippedReason) {
     lines.push(`VirusTotal upload was skipped: ${skippedReason}`, '');
@@ -126,15 +129,19 @@ async function main() {
   for (const row of rows) {
     const filePath = existingFiles.find((candidate) => path.basename(candidate) === row.name);
     console.log(`Uploading ${row.name} to VirusTotal...`);
-    const response = await uploadFile(filePath);
-    if (response.alreadySubmitted) {
-      console.log(`${row.name} is already being scanned by VirusTotal; using hash link.`);
-      continue;
+    try {
+      const response = await uploadFile(filePath);
+      if (response.alreadySubmitted) {
+        console.log(`${row.name} is already being scanned by VirusTotal; using hash link.`);
+      } else {
+        row.analysisId = response && response.data && response.data.id ? response.data.id : '';
+        row.analysisUrl = row.analysisId
+          ? `https://www.virustotal.com/gui/analysis/${encodeURIComponent(row.analysisId)}`
+          : '';
+      }
+    } catch (err) {
+      console.warn(`Failed to upload ${row.name} to VirusTotal: ${err.message}. Using default hash link.`);
     }
-    row.analysisId = response && response.data && response.data.id ? response.data.id : '';
-    row.analysisUrl = row.analysisId
-      ? `https://www.virustotal.com/gui/analysis/${encodeURIComponent(row.analysisId)}`
-      : '';
     await new Promise((resolve) => setTimeout(resolve, 16000));
   }
 

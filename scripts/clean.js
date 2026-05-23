@@ -28,20 +28,6 @@ run('taskkill', ['/F', '/IM', 'ISpooferMotion.exe', '/T']);
 run('taskkill', ['/F', '/IM', 'ISpooferMotion Launcher.exe', '/T']);
 run('taskkill', ['/F', '/IM', 'electron.exe', '/T']);
 
-[
-  'dist',
-  'out',
-  'plugin-build',
-  'dist-plugin',
-  '.cache',
-  '.vite',
-  'launcher/dist',
-  'launcher/build',
-  'launcher/out',
-  'launcher/.cache',
-  'launcher/.vite',
-  'node_modules',
-  'launcher/node_modules',
-].forEach(remove);
+['dist', 'out', 'plugin-build', 'dist-plugin', '.cache', '.vite'].forEach(remove);
 
 console.log('clean complete');

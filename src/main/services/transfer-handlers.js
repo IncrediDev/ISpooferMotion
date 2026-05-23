@@ -9,9 +9,9 @@ const DOWNLOAD_DEFAULTS = Object.freeze({
   retryDelayMs: 2_000,
 });
 
-const MAX_UPLOAD_RATE_LIMIT_RETRIES = 4;
-const MAX_UPLOAD_POLL_ATTEMPTS = 30;
-const UPLOAD_POLL_INTERVAL_MS = 1_000;
+const MAX_UPLOAD_RATE_LIMIT_RETRIES = 5;
+const MAX_UPLOAD_POLL_ATTEMPTS = 120;
+const UPLOAD_POLL_INTERVAL_MS = 2_000;
 const ASSET_UPLOAD_URL = 'https://apis.roblox.com/assets/v1/assets';
 
 let rateLimitUntil = 0;
@@ -72,12 +72,15 @@ function sanitizeUploadName(name, fallback = 'asset') {
   return safeName || fallback;
 }
 
-function getRetryAfterMs(response) {
-  const retryAfterSeconds = Number.parseInt(response.headers.get('retry-after') || '30', 10);
-  const safeSeconds = Number.isFinite(retryAfterSeconds)
-    ? Math.min(Math.max(retryAfterSeconds, 1), 60)
-    : 30;
-  return safeSeconds * 1000 + Math.floor(Math.random() * 8_000);
+function getRetryAfterMs(response, attempt = 1) {
+  const retryAfterSeconds = Number.parseInt(response?.headers?.get('retry-after'), 10);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(Math.max(retryAfterSeconds, 1), 60) * 1000;
+  }
+  const baseMs = 5000;
+  const expMs = baseMs * Math.pow(1.5, attempt - 1);
+  const safeMs = Math.min(expMs, 60000);
+  return Math.floor(safeMs + Math.random() * 2000);
 }
 
 function shouldRetryDownload(error) {
@@ -231,10 +234,17 @@ async function downloadAnimationAssetWithProgress(
 
   for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
     try {
+      const fetchHeaders = { Cookie: cookieHeader };
+      if (placeId) {
+        fetchHeaders['Roblox-Place-Id'] = String(placeId);
+        fetchHeaders['User-Agent'] = 'RobloxStudio/WinInet';
+        fetchHeaders['Roblox-Browser-Asset-Request'] = 'true';
+      }
+
       const response = await fetchWithTimeout(
         url,
         {
-          headers: { Cookie: cookieHeader },
+          headers: fetchHeaders,
           redirect: 'follow',
         },
         timeoutMs,
@@ -311,6 +321,8 @@ async function uploadAsset(
   apiKey,
   transferId,
   sendTransferUpdate,
+  customMethod = 'POST',
+  customUrl = ASSET_UPLOAD_URL,
 ) {
   let response = null;
   let responseData = null;
@@ -322,8 +334,8 @@ async function uploadAsset(
 
     await waitRateLimit();
 
-    response = await fetch(ASSET_UPLOAD_URL, {
-      method: 'POST',
+    response = await fetch(customUrl, {
+      method: customMethod,
       headers: { 'x-api-key': apiKey },
       body: formData,
     });
@@ -338,7 +350,7 @@ async function uploadAsset(
       );
     }
 
-    const waitMs = getRetryAfterMs(response);
+    const waitMs = getRetryAfterMs(response, attempt + 1);
     if (DEVELOPER_MODE)
       console.log(`[UPLOAD DEBUG] Rate limited, pausing all slots for ${waitMs}ms`);
     sendTransferUpdateSafe(sendTransferUpdate, {
@@ -395,6 +407,15 @@ async function pollUploadOperation(
     const pollData = await readJsonResponse(response);
 
     if (!response.ok) {
+      if (response.status === 429) {
+        if (DEVELOPER_MODE)
+          console.log(
+            `[UPLOAD DEBUG] Polling rate limited (429) on attempt ${attempt}, pausing...`,
+          );
+        const waitMs = getRetryAfterMs(response, attempt);
+        await delay(waitMs);
+        continue;
+      }
       throw new Error(
         `Upload poll failed (${response.status}). Response: ${JSON.stringify(pollData || {})}`,
       );
@@ -443,6 +464,7 @@ async function publishAnimationRbxmWithProgress(
   assetTypeName = 'Animation',
   apiKey = null,
   userId = null,
+  options = {},
 ) {
   let fileBuffer;
 
@@ -501,6 +523,45 @@ async function publishAnimationRbxmWithProgress(
   }
 
   try {
+    let method = 'POST';
+    let url = ASSET_UPLOAD_URL;
+    let existingId = null;
+
+    if (options.replaceExisting) {
+      const { findAssetByName } = require('./assets');
+      existingId = await findAssetByName(cookie, assetType, name, groupId);
+      if (existingId) {
+        if (String(assetType) === "3") {
+          if (options.onLog) {
+            options.onLog(`[Replace] Found existing audio "${name}" (ID: ${existingId}). Audio cannot be patched, skipping upload...`, 'success');
+          }
+          sendTransferUpdateSafe(sendTransferUpdate, {
+            id: transferId,
+            progress: 100,
+            status: 'completed',
+            newAssetId: String(existingId),
+          });
+          return { success: true, assetId: String(existingId), replacedId: existingId };
+        }
+
+        if (DEVELOPER_MODE)
+          console.log(
+            `[UPLOAD DEBUG] Found existing asset ${existingId} for "${name}". Using PATCH.`,
+          );
+        method = 'PATCH';
+        url = `https://apis.roblox.com/assets/v1/assets/${existingId}`;
+        
+        // Open Cloud PATCH does not allow assetType or creationContext
+        delete requestMetadata.assetType;
+        delete requestMetadata.creationContext;
+        requestMetadata.assetId = String(existingId);
+        
+        if (options.onLog) {
+          options.onLog(`[Replace] Found and overwriting existing animation "${name}" (ID: ${existingId})...`, 'warn');
+        }
+      }
+    }
+
     const responseData = await uploadAsset(
       fileBuffer,
       fileName,
@@ -509,6 +570,8 @@ async function publishAnimationRbxmWithProgress(
       apiKey,
       transferId,
       sendTransferUpdate,
+      method,
+      url,
     );
 
     if (responseData?.done && responseData.response) {
@@ -520,7 +583,7 @@ async function publishAnimationRbxmWithProgress(
           status: 'completed',
           newAssetId: String(assetId),
         });
-        return { success: true, assetId: String(assetId) };
+        return { success: true, assetId: String(assetId), replacedId: existingId };
       }
     }
 
@@ -532,7 +595,7 @@ async function publishAnimationRbxmWithProgress(
         transferId,
         sendTransferUpdate,
       );
-      return { success: true, assetId };
+      return { success: true, assetId, replacedId: existingId };
     }
 
     throw new Error(

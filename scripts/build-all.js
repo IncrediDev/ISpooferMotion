@@ -16,14 +16,16 @@ function run(command, args, cwd = root) {
   const result = spawnSync(commandForPlatform(command), args, {
     cwd,
     stdio: 'inherit',
-    shell: false,
+    shell: process.platform === 'win32',
   });
-  if (result.status !== 0) process.exit(result.status || 1);
+  if (result.status !== 0) {
+    console.error(result.error);
+    process.exit(result.status || 1);
+  }
 }
 
 run('npm', ['run', 'clean']);
 run('npm', ['run', 'build:plugin']);
 run('npm', ['run', 'build']);
-run('npm', ['run', 'build:setup'], path.join(root, 'launcher'));
 
 console.log('\nbuild complete');

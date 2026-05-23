@@ -58,12 +58,8 @@ fs.mkdirSync(outDir, { recursive: true });
 const pluginSource = fs
   .readFileSync(path.join(root, 'src', 'plugin', 'plugin.lua'), 'utf8')
   .replace(/__ISPOOFERMOTION_VERSION__/g, version);
-const getIdsFactorySource = fs.readFileSync(
-  path.join(root, 'src', 'plugin', 'modules', 'GetIdsUIFactory.lua'),
-  'utf8',
-);
-const replaceIdsFactorySource = fs.readFileSync(
-  path.join(root, 'src', 'plugin', 'modules', 'ReplaceIdsUIFactory.lua'),
+const unifiedUIFactorySource = fs.readFileSync(
+  path.join(root, 'src', 'plugin', 'modules', 'UnifiedUIFactory.lua'),
   'utf8',
 );
 
@@ -78,14 +74,7 @@ const assetsFolder = item(
   'Folder',
   'Assets',
   [propString('Name', 'Assets')],
-  scriptItem('ModuleScript', 'GetIdsUIFactory', 'GetIdsUIFactory', getIdsFactorySource, false) +
-    scriptItem(
-      'ModuleScript',
-      'ReplaceIdsUIFactory',
-      'ReplaceIdsUIFactory',
-      replaceIdsFactorySource,
-      false,
-    ),
+  scriptItem('ModuleScript', 'UnifiedUIFactory', 'UnifiedUIFactory', unifiedUIFactorySource, false),
 );
 
 const xml = `<?xml version="1.0" encoding="utf-8"?>

@@ -33,9 +33,23 @@ const INVOKE_CHANNELS = new Set([
   'export-support-report',
   'clear-asset-history',
   'check-session',
+  'open-data-folder',
+  'open-logs-folder',
+  'clear-app-cache',
+  'uninstall-app',
+  'get-jobs',
+  'delete-job',
+  'show-notification',
+  'open-dev-console',
 ]);
 
-const SUBSCRIBE_CHANNELS = new Set(['update-status-message', 'spoofer-result', 'transfer-update']);
+const SUBSCRIBE_CHANNELS = new Set([
+  'update-status-message',
+  'spoofer-result',
+  'transfer-update',
+  'spoofer-log',
+  'spoofer-progress',
+]);
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -98,6 +112,8 @@ const electronAPI = Object.freeze({
   onStatusMessage: (callback) => subscribe('update-status-message', callback),
   onSpooferResult: (callback) => subscribe('spoofer-result', callback),
   onTransferUpdate: (callback) => subscribe('transfer-update', callback),
+  onSpooferLog: (callback) => subscribe('spoofer-log', callback),
+  onSpooferProgress: (callback) => subscribe('spoofer-progress', callback),
 
   getAppVersion: () => invoke('get-app-version'),
   getReleaseSource: () => invoke('get-release-source'),
@@ -112,7 +128,7 @@ const electronAPI = Object.freeze({
 
   loadRendererSettings: () => invoke('load-renderer-settings'),
   saveRendererSettings: (settings) => invoke('save-renderer-settings', asRecord(settings)),
-  loadProfileSecrets: (profileIds) => invoke('load-profile-secrets', asArray(profileIds)),
+  loadProfileSecrets: () => invoke('load-profile-secrets'),
   saveProfileSecrets: (data) => invoke('save-profile-secrets', asRecord(data)),
   clearProfileSecrets: (profileId) => invoke('clear-profile-secrets', profileId),
   getRobloxProfile: (context) => invoke('get-roblox-profile', asRecord(context)),
@@ -132,8 +148,15 @@ const electronAPI = Object.freeze({
   copyDebugInfo: (context) => invoke('copy-debug-info', asRecord(context)),
   exportSupportReport: (context) => invoke('export-support-report', asRecord(context)),
   clearCache: () => invoke('clear-asset-history'),
+  openDataFolder: () => invoke('open-data-folder'),
+  clearAppCache: () => invoke('clear-app-cache'),
+  showNotification: (options) => invoke('show-notification', asRecord(options)),
+  openDevConsole: () => invoke('open-dev-console'),
 
   checkSession: () => invoke('check-session'),
+  uninstallApp: () => invoke('uninstall-app'),
+  getJobs: () => invoke('get-jobs'),
+  deleteJob: (jobId) => invoke('delete-job', jobId),
   clearSession: () => send('clear-session'),
 });
 

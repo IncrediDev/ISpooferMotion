@@ -1,0 +1,227 @@
+import { useEffect, useRef, useState } from 'react';
+
+export default function TopBar({ toggleSidebar }) {
+  const [quotaText, setQuotaText] = useState('Checking quota...');
+  const [isQuotaOpen, setIsQuotaOpen] = useState(false);
+  const [isFlashing, setIsFlashing] = useState(false);
+  const popupRef = useRef(null);
+  const [profilesInfo, setProfilesInfo] = useState({ activeId: null, profiles: {} });
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      try {
+        const secrets = await window.electronAPI?.loadProfileSecrets?.();
+        if (secrets) {
+          setProfilesInfo({
+            activeId: secrets.activeProfileId,
+            profiles: secrets.profiles || {},
+          });
+        }
+      } catch (err) {}
+    };
+    fetchProfiles();
+
+    // In a real port, we'd use an event bus or Context for profile changes.
+    // For now, we will just listen to a custom event if needed or poll,
+    // but better to implement a context later.
+  }, []);
+
+  const handleQuotaClick = async (e) => {
+    e.stopPropagation();
+    if (isQuotaOpen) {
+      setIsQuotaOpen(false);
+      return;
+    }
+
+    setIsQuotaOpen(true);
+    setIsFlashing(false);
+    setQuotaText('Checking quota...');
+
+    try {
+      // In a full implementation, we need the active profile's cookie
+      const secrets = await window.electronAPI?.loadProfileSecrets?.();
+      const activeProfile = secrets?.profiles?.[secrets.activeProfileId] || {};
+      const cookie = activeProfile.cookie || '';
+      const autoDetect = activeProfile.autoDetectCookie !== false;
+
+      const result = await window.electronAPI?.getAudioQuota?.({ cookie, autoDetect });
+
+      let used = 0;
+      let capacity = 0;
+
+      if (!result || result.error) {
+        setQuotaText(`Could not fetch quota: ${result?.error || 'Unknown'}`);
+        return;
+      }
+
+      if (Array.isArray(result.quotas)) {
+        const quota =
+          result.quotas.find((q) => String(q?.duration).toLowerCase() === 'month') ||
+          result.quotas[0];
+        used = Number(quota?.usage ?? quota?.used ?? quota?.consumed ?? 0);
+        capacity = Number(quota?.capacity ?? quota?.limit ?? quota?.total ?? 0);
+      } else if (result.usage && typeof result.usage === 'object') {
+        used = Number(result.usage.used ?? result.usage.usage ?? 0);
+        capacity = Number(result.usage.capacity ?? result.usage.total ?? result.usage.limit ?? 0);
+      } else {
+        used = Number(result.usage ?? result.used ?? 0);
+        capacity = Number(result.capacity ?? result.total ?? result.limit ?? 0);
+      }
+
+      if (capacity > 0) {
+        const remaining = Math.max(0, capacity - used);
+        setQuotaText(
+          `Audio quota: ${used.toLocaleString()} / ${capacity.toLocaleString()} used (${remaining.toLocaleString()} remaining)`,
+        );
+        if (used / capacity >= 0.8) {
+          setIsFlashing(true);
+        }
+      } else {
+        setQuotaText('Quota data unavailable.');
+      }
+    } catch (err) {
+      setQuotaText(`Could not fetch quota: ${err.message}`);
+    }
+
+    setTimeout(() => setIsQuotaOpen(false), 8000);
+  };
+
+  const activeProfileName = profilesInfo.profiles[profilesInfo.activeId]?.name || 'Profile 1';
+
+  return (
+    <header className="top-bar">
+      <button
+        className="icon-button ui-icon-button menu-toggle"
+        id="sidebar-toggle"
+        type="button"
+        aria-label="Toggle sidebar"
+        onClick={toggleSidebar}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16v2H4V7Zm0 4h16v2H4v-2Zm0 4h16v2H4v-2Z" />
+        </svg>
+      </button>
+
+      <div
+        className={`profile-picker ${isProfileMenuOpen ? 'open' : ''}`}
+        aria-label="Profile selector"
+      >
+        <button
+          className="profile-trigger ui-button"
+          id="profile-trigger"
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={isProfileMenuOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsProfileMenuOpen(!isProfileMenuOpen);
+          }}
+        >
+          <span className="profile-trigger-label" id="profile-trigger-label">
+            {activeProfileName}
+          </span>
+          <svg className="profile-trigger-arrow" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7.4 9.2 12 13.8l4.6-4.6L18 10.6l-6 6-6-6 1.4-1.4Z" />
+          </svg>
+        </button>
+        {isProfileMenuOpen && (
+          <div
+            className="profile-menu ui-dropdown"
+            id="profile-menu"
+            role="listbox"
+            aria-label="Profiles"
+            tabIndex="-1"
+          >
+            {Object.entries(profilesInfo.profiles).map(([id, profile]) => (
+              <button
+                key={id}
+                className={`profile-option ui-button ${id === profilesInfo.activeId ? 'selected' : ''}`}
+                type="button"
+                role="option"
+                aria-selected={id === profilesInfo.activeId}
+                data-profile={id}
+                onClick={async () => {
+                  await window.electronAPI?.saveProfileSecrets?.({
+                    action: 'setActive',
+                    profileId: id,
+                  });
+                  setProfilesInfo((prev) => ({ ...prev, activeId: id }));
+                  setIsProfileMenuOpen(false);
+                  window.dispatchEvent(new Event('profile-changed'));
+                }}
+              >
+                <span>{profile.name || 'Unnamed Profile'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="top-spacer"></div>
+
+      <button
+        className="top-social ui-icon-button"
+        type="button"
+        aria-label="Open GitHub"
+        title="GitHub"
+        onClick={() =>
+          window.electronAPI?.openExternal?.('https://github.com/IncrediDev/ISpooferMotion')
+        }
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.25A9.75 9.75 0 0 0 8.92 21.25c.48.09.66-.2.66-.46v-1.72c-2.7.59-3.27-1.16-3.27-1.16-.44-1.12-1.07-1.42-1.07-1.42-.88-.6.07-.59.07-.59.97.07 1.48 1 1.48 1 .86 1.47 2.25 1.05 2.8.8.09-.63.34-1.05.61-1.29-2.15-.24-4.42-1.08-4.42-4.79 0-1.06.38-1.92 1-2.6-.1-.25-.43-1.23.1-2.56 0 0 .81-.26 2.67.99A9.15 9.15 0 0 1 12 7.12c.83 0 1.65.11 2.43.33 1.85-1.25 2.66-.99 2.66-.99.54 1.33.2 2.31.1 2.56.62.68 1 1.54 1 2.6 0 3.72-2.27 4.54-4.43 4.78.35.31.66.9.66 1.82v2.57c0 .26.17.56.67.46A9.75 9.75 0 0 0 12 2.25Z" />
+        </svg>
+      </button>
+
+      <button
+        className="top-social ui-icon-button"
+        type="button"
+        aria-label="Open website"
+        title="Website"
+        onClick={() => window.electronAPI?.openExternal?.('https://www.incredidev.com/ism')}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4.5 5.5A2.5 2.5 0 0 1 7 3h10a2.5 2.5 0 0 1 2.5 2.5v13A2.5 2.5 0 0 1 17 21H7a2.5 2.5 0 0 1-2.5-2.5v-13Zm2 .75V8h11V6.25a.75.75 0 0 0-.75-.75h-9.5a.75.75 0 0 0-.75.75ZM6.5 10v7.75c0 .41.34.75.75.75h9.5c.41 0 .75-.34.75-.75V10h-11Zm6.35 2.15 1.41 1.41-3.94 3.94H13v2H7v-6h2v2.67l3.85-4.02Z" />
+        </svg>
+      </button>
+
+      <button
+        className="top-social ui-icon-button discord-button"
+        type="button"
+        aria-label="Open Discord"
+        title="Discord"
+        onClick={() => window.electronAPI?.openExternal?.('https://discord.gg/d5cJzAURBH')}
+      >
+        <svg viewBox="0 0 127.14 96.36" aria-hidden="true">
+          <path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.35 2.66-2.06a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.4 2.66 2.06a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z" />
+        </svg>
+      </button>
+
+      <div className="window-controls">
+        <button
+          className="ui-icon-button"
+          id="minimize-btn"
+          type="button"
+          aria-label="Minimize"
+          onClick={() => window.electronAPI?.minimize?.()}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 11h12v2H6v-2Z" />
+          </svg>
+        </button>
+        <button
+          className="ui-icon-button"
+          id="close-btn"
+          type="button"
+          aria-label="Close"
+          onClick={() => window.electronAPI?.close?.()}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z" />
+          </svg>
+        </button>
+      </div>
+    </header>
+  );
+}

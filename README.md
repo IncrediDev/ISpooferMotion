@@ -3,6 +3,7 @@
 **ISpooferMotion** is an animation spoofing utility designed for Roblox developers and animators (Animation Spoofer / Asset Spoofer). It helps you quickly upload and apply animation overrides.
 
 ## 🟢STATUS : WORKING!; Join the discord for status updates! https://discord.gg/d5cJzAURBH
+
 - Audio And Image Spoofing Soon
 
 ## Features
@@ -32,17 +33,11 @@ Download the latest release executable from the [Releases](https://github.com/In
 - Open the ISpooferMotion app and paste the ids into the textbox ![image](https://github.com/user-attachments/assets/0a126ebd-1ab3-4a17-b55b-c763d5021e15)
 - Next you can enter your cookie manually or select the Auto Detect Cookie option for the account you want to upload the animations to ![image](https://github.com/user-attachments/assets/ca442d20-07ec-4d9e-81a2-ee7c86c4e8ad)
 - Optionally you can enter a Group ID To upload the animations to a Group you have permissions in
-- Click Run Spoofer and then wait for the output 
+- Click Run Spoofer and then wait for the output
 - The output should look like this ![image](https://github.com/user-attachments/assets/35bb3c92-fb03-4f81-b5f4-77ce7a9c7407)
 - Copy the contents of the output, Then head back to studio and click the Replace Id's Button in the Plugins tab ![image](https://github.com/user-attachments/assets/e45f4ee0-8d5b-4531-91f6-4dc9d50206ab)
 - Paste the contents into the TextBox and click Run ![image](https://github.com/user-attachments/assets/e063ab9e-0867-4ca3-bf2d-733a9855cadd)
 - Thats it! All animations are spoofed and replaced in your game!
-
-
-
-
-
-
 
 - Upload your animation files.
 - Open Roblox Studio and use the ISpooferMotion plugin to link and spoof the animations.
