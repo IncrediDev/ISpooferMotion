@@ -47,7 +47,6 @@
       "!src/renderer-react/node_modules/**/*",
       "!src/renderer-react/src/**/*",
       "!downloads/**/*",
-      "!dist/**/*",
       "!tests/**/*"
     ],
     "directories": {
