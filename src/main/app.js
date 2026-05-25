@@ -3,6 +3,7 @@ const { app } = require('electron');
 const { setupAppLifecycle, getMainWindow } = require('./window');
 const { registerIpcHandlers } = require('./services/ipc-handlers');
 const { DEVELOPER_MODE, initializeFileLogging } = require('./services/common');
+const { checkForUpdates } = require('./services/updater');
 
 function getLogsDir() {
   return path.join(app.getPath('userData'), 'ispoofer_logs');
@@ -40,15 +41,31 @@ function sendStatusMessage(message) {
   return sendToRenderer('update-status-message', message);
 }
 
+function sendSpooferLog(logData) {
+  return sendToRenderer('spoofer-log', logData);
+}
+
+function sendSpooferProgress(progressData) {
+  return sendToRenderer('spoofer-progress', progressData);
+}
+
 function bootstrap() {
+  app.name = 'ISpooferMotion';
+  if (app.isPackaged) {
+    app.setAppUserModelId('com.github.IncrediDev.ISpooferMotion');
+  }
   initializeFileLogging(getLogsDir());
   registerIpcHandlers(
     getMainWindow,
     sendTransferUpdate,
     sendSpooferResultToRenderer,
     sendStatusMessage,
+    sendSpooferLog,
+    sendSpooferProgress,
   );
-  return setupAppLifecycle();
+  return setupAppLifecycle().then(() => {
+    checkForUpdates().catch((err) => console.error('Updater error:', err));
+  });
 }
 
 bootstrap().catch((error) => {

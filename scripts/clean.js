@@ -35,13 +35,8 @@ run('taskkill', ['/F', '/IM', 'electron.exe', '/T']);
   'dist-plugin',
   '.cache',
   '.vite',
-  'launcher/dist',
-  'launcher/build',
-  'launcher/out',
-  'launcher/.cache',
-  'launcher/.vite',
-  'node_modules',
-  'launcher/node_modules',
+  'src/renderer-react/dist',
+  'src/renderer-react/.vite',
 ].forEach(remove);
 
 console.log('clean complete');

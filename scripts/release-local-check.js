@@ -25,31 +25,25 @@ for (const file of [
   'package-lock.json',
   'src/assets/app_icon.ico',
   'src/assets/app_icon.png',
-  'launcher/package.json',
-  'launcher/package-lock.json',
-  'launcher/src/assets/app_icon.ico',
-  'launcher/src/assets/app_icon.png',
   'scripts/build-plugin-rbxmx.js',
   'scripts/extract-release-notes.js',
   'scripts/verify-release-assets.js',
-]) exists(file);
+])
+  exists(file);
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const launcherPkg = JSON.parse(fs.readFileSync(path.join(root, 'launcher/package.json'), 'utf8'));
-if (pkg.version !== launcherPkg.version) {
-  errors.push(`App version ${pkg.version} does not match launcher version ${launcherPkg.version}.`);
-}
 
 if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(pkg.version)) {
   errors.push(`Version is not semver-compatible: ${pkg.version}`);
 }
 
-if (!pkg.scripts || !pkg.scripts.test || !pkg.scripts['release:local-check'] || !pkg.scripts['release:hardening-check']) {
+if (
+  !pkg.scripts ||
+  !pkg.scripts.test ||
+  !pkg.scripts['release:local-check'] ||
+  !pkg.scripts['release:hardening-check']
+) {
   errors.push('package.json is missing required workflow scripts.');
-}
-
-if (!launcherPkg.scripts || !launcherPkg.scripts['build:win:release']) {
-  errors.push('launcher/package.json is missing build:win:release.');
 }
 
 if (errors.length) {

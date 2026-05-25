@@ -12,78 +12,31 @@ const {
   sanitizeFilename,
 } = require('./common');
 const {
-  getCookieFromRobloxStudio,
-  getCsrfToken,
   getPlaceIdFromCreator,
+  getMultiplePlaceIds,
+} = require('./assets');
+const {
+  getCookieFromRobloxStudio,
   getAuthenticatedUserId,
-} = require('./roblox-api');
+  getCsrfToken,
+} = require('./auth');
 const {
   downloadAnimationAssetWithProgress,
   publishAnimationRbxmWithProgress,
 } = require('./transfer-handlers');
+const { loadJobs, saveJobRecord, deleteJobRecord } = require('./jobs');
+const { saveSession, loadSession, clearSession } = require('./session');
+const {
+  pauseSpoofer,
+  resumeSpoofer,
+  cancelSpoofer,
+  resetRunControls,
+  checkCancelled,
+  checkPaused,
+} = require('./ProcessManager');
 
-// Pause / Resume
-let isPaused = false;
-let isCancelled = false;
-const pauseResolvers = new Set();
 
-function pauseSpoofer() {
-  isPaused = true;
-}
 
-function resumeSpoofer() {
-  isPaused = false;
-  for (const resolve of pauseResolvers) resolve();
-  pauseResolvers.clear();
-}
-
-function cancelSpoofer() {
-  isCancelled = true;
-  resumeSpoofer();
-}
-
-function resetRunControls() {
-  isCancelled = false;
-  resumeSpoofer();
-}
-
-function checkCancelled() {
-  if (isCancelled) {
-    throw new Error('Operation cancelled');
-  }
-}
-
-async function checkPaused() {
-  checkCancelled();
-  if (!isPaused) return;
-  await new Promise((resolve) => pauseResolvers.add(resolve));
-  checkCancelled();
-}
-
-// Session (crash recovery)
-function getSessionPath() {
-  return path.join(app.getPath('userData'), 'ispoofer_session.json');
-}
-
-async function saveSession(session) {
-  try {
-    await fs.writeFile(getSessionPath(), JSON.stringify(session, null, 2), 'utf8');
-  } catch (err) {
-    if (DEVELOPER_MODE) console.warn('(Dev) Failed to save session:', err);
-  }
-}
-
-async function loadSession() {
-  try {
-    return JSON.parse(await fs.readFile(getSessionPath(), 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-async function clearSession() {
-  await fs.rm(getSessionPath(), { force: true }).catch(() => {});
-}
 
 function normalizePayload(value) {
   return value && typeof value === 'object' ? value : {};
@@ -156,34 +109,157 @@ function getProfileSecretsPath() {
   return path.join(app.getPath('userData'), 'profile-secrets.json');
 }
 
-async function loadProfileSecrets(profileIds) {
-  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
-  if (!Array.isArray(profileIds) || profileIds.length === 0) return allSecrets;
+function migrateProfileSecrets(allSecrets) {
+  if (allSecrets && !allSecrets.profiles) {
+    const oldProfiles = { ...allSecrets };
+    delete oldProfiles.activeProfileId;
+    return {
+      activeProfileId: 'default',
+      profiles:
+        Object.keys(oldProfiles).length > 0
+          ? oldProfiles
+          : {
+              default: { name: 'Default Profile', cookie: '', apiKey: '', groupId: '' },
+            },
+    };
+  }
+  if (!allSecrets || !allSecrets.profiles) {
+    return {
+      activeProfileId: 'default',
+      profiles: {
+        default: { name: 'Default Profile', cookie: '', apiKey: '', groupId: '' },
+      },
+    };
+  }
+  return allSecrets;
+}
 
-  return Object.fromEntries(
-    profileIds.map((profileId) => [String(profileId), allSecrets[String(profileId)] || {}]),
-  );
+async function loadProfileSecrets() {
+  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
+  return migrateProfileSecrets(allSecrets);
 }
 
 async function saveProfileSecrets(data) {
   const payload = normalizePayload(data);
-  const profileId = String(payload.profileId || 'default');
-  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
-  allSecrets[profileId] = {
-    ...(allSecrets[profileId] || {}),
-    ...normalizePayload(payload.secrets || payload),
-  };
-  delete allSecrets[profileId].profileId;
+  const allSecrets = await loadProfileSecrets();
+
+  if (payload.action === 'setActive') {
+    allSecrets.activeProfileId = payload.profileId;
+  } else if (payload.action === 'saveProfile') {
+    const pId = payload.profileId || `profile_${Date.now()}`;
+    allSecrets.profiles[pId] = {
+      ...(allSecrets.profiles[pId] || {}),
+      ...payload.secrets,
+    };
+  } else if (payload.action === 'deleteProfile') {
+    delete allSecrets.profiles[payload.profileId];
+    if (allSecrets.activeProfileId === payload.profileId) {
+      const remaining = Object.keys(allSecrets.profiles);
+      allSecrets.activeProfileId = remaining.length > 0 ? remaining[0] : null;
+    }
+  } else if (payload.profileId) {
+    // Backwards compatibility
+    const pId = String(payload.profileId || 'default');
+    allSecrets.profiles[pId] = {
+      ...(allSecrets.profiles[pId] || {}),
+      ...normalizePayload(payload.secrets || payload),
+    };
+    delete allSecrets.profiles[pId].profileId;
+  }
+
+  await writeJsonFile(getProfileSecretsPath(), allSecrets);
+  return allSecrets;
+}
+
+async function clearProfileSecrets(profileId) {
+  const allSecrets = await loadProfileSecrets();
+  if (profileId && allSecrets.profiles[profileId]) {
+    delete allSecrets.profiles[profileId];
+    if (allSecrets.activeProfileId === profileId) {
+      const remaining = Object.keys(allSecrets.profiles);
+      allSecrets.activeProfileId = remaining.length > 0 ? remaining[0] : null;
+    }
+  } else {
+    allSecrets.profiles = {};
+    allSecrets.activeProfileId = null;
+  }
   await writeJsonFile(getProfileSecretsPath(), allSecrets);
   return true;
 }
 
-async function clearProfileSecrets(profileId) {
-  const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
-  if (profileId) delete allSecrets[String(profileId)];
-  else for (const key of Object.keys(allSecrets)) delete allSecrets[key];
-  await writeJsonFile(getProfileSecretsPath(), allSecrets);
-  return true;
+async function fetchJson(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const { net } = require('electron');
+    const req = net.request({ url, ...options });
+    req.on('response', (response) => {
+      let data = '';
+      response.on('data', (chunk) => {
+        data += chunk;
+      });
+      response.on('end', () => {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        } else {
+          reject(new Error(`HTTP ${response.statusCode}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function getRobloxProfile(context) {
+  if (!context) return null;
+  let cookie = context.cookie;
+  if (!cookie && context.autoDetect) {
+    const { getCookieFromRobloxStudio } = require('./auth');
+    cookie = await getCookieFromRobloxStudio();
+  }
+  if (!cookie) return null;
+  cookie = cookie.replace('.ROBLOSECURITY=', '').trim();
+  const groupId = context.groupId ? String(context.groupId).trim() : null;
+
+  try {
+    const userResp = await fetchJson('https://users.roblox.com/v1/users/authenticated', {
+      headers: { Cookie: `.ROBLOSECURITY=${cookie}` },
+    });
+    if (!userResp || !userResp.id) return null;
+    const userId = userResp.id;
+    const username = userResp.name || userResp.displayName;
+
+    const avatarResp = await fetchJson(
+      `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=true`,
+    );
+    const avatarUrl = avatarResp?.data?.[0]?.imageUrl || '';
+
+    let groupInfo = null;
+    if (groupId) {
+      try {
+        const gResp = await fetchJson(`https://groups.roblox.com/v1/groups/${groupId}`);
+        const gAvatarResp = await fetchJson(
+          `https://thumbnails.roblox.com/v1/groups/icons?groupIds=${groupId}&size=150x150&format=Png&isCircular=true`,
+        );
+
+        groupInfo = {
+          id: groupId,
+          name: gResp.name,
+          iconUrl: gAvatarResp?.data?.[0]?.imageUrl || '',
+        };
+      } catch (e) {}
+    }
+
+    return {
+      user: { id: userId, name: username, avatarUrl },
+      group: groupInfo,
+    };
+  } catch (error) {
+    return null;
+  }
 }
 
 /**
@@ -194,6 +270,8 @@ function registerIpcHandlers(
   sendTransferUpdate,
   sendSpooferResultToRenderer,
   sendStatusMessage,
+  sendSpooferLog,
+  sendSpooferProgress,
 ) {
   onIpc('window-minimize', () => getMainWindowFn()?.minimize());
   onIpc('window-close', () => getMainWindowFn()?.close());
@@ -214,10 +292,10 @@ function registerIpcHandlers(
     await writeJsonFile(getRendererSettingsPath(), normalizePayload(settings));
     return true;
   });
-  handleIpc('load-profile-secrets', (_event, profileIds) => loadProfileSecrets(profileIds));
+  handleIpc('load-profile-secrets', () => loadProfileSecrets());
   handleIpc('save-profile-secrets', (_event, data) => saveProfileSecrets(data));
   handleIpc('clear-profile-secrets', (_event, profileId) => clearProfileSecrets(profileId));
-  handleIpc('get-roblox-profile', () => null);
+  handleIpc('get-roblox-profile', (_event, context) => getRobloxProfile(context));
   handleIpc('clear-asset-history', async () => true);
   handleIpc('copy-debug-info', async (_event, context) => {
     const info = JSON.stringify(
@@ -235,6 +313,121 @@ function registerIpcHandlers(
       createdAt: new Date().toISOString(),
     });
     return reportPath;
+  });
+
+  handleIpc('open-data-folder', async () => {
+    try {
+      await shell.openPath(app.getPath('userData'));
+      return true;
+    } catch (e) {
+      if (DEVELOPER_MODE) console.warn('Failed to open data folder', e);
+      return false;
+    }
+  });
+
+  handleIpc('open-logs-folder', async () => {
+    const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
+    try {
+      await fs.mkdir(logsDir, { recursive: true });
+      await shell.openPath(logsDir);
+      return true;
+    } catch (e) {
+      if (DEVELOPER_MODE) console.warn('Failed to open logs folder', e);
+      return false;
+    }
+  });
+
+  handleIpc('uninstall-app', async () => {
+    try {
+      if (process.platform === 'win32') {
+        const uninstallerPath = path.join(process.resourcesPath, '..', 'Uninstall ISpooferMotion.exe');
+        try {
+          const { spawn } = require('child_process');
+          spawn(uninstallerPath, [], { detached: true, stdio: 'ignore' }).unref();
+          app.quit();
+          return true;
+        } catch (err) {
+          // fallback to just wiping app data
+        }
+      }
+
+      const userDataPath = app.getPath('userData');
+      await fs.rm(userDataPath, { recursive: true, force: true });
+      app.quit();
+      return true;
+    } catch (e) {
+      if (DEVELOPER_MODE) console.warn('Failed to uninstall app', e);
+      return false;
+    }
+  });
+
+  handleIpc('get-jobs', async () => {
+    return await loadJobs();
+  });
+
+  handleIpc('delete-job', async (_event, jobId) => {
+    await deleteJobRecord(jobId);
+    return true;
+  });
+
+  handleIpc('clear-app-cache', async () => {
+    try {
+      const session = require('electron').session;
+      await session.defaultSession.clearStorageData();
+      return true;
+    } catch (e) {
+      if (DEVELOPER_MODE) console.warn('Failed to clear app cache', e);
+      return false;
+    }
+  });
+
+  handleIpc('show-notification', async (_event, options) => {
+    try {
+      const { Notification, nativeImage } = require('electron');
+      if (Notification.isSupported()) {
+        const path = require('node:path');
+        const iconPath =
+          process.platform === 'win32'
+            ? path.join(__dirname, '..', '..', 'assets', 'app_icon.ico')
+            : path.join(__dirname, '..', '..', 'assets', 'app_icon.png');
+
+        new Notification({
+          title: options.title || 'ISpooferMotion',
+          body: options.body || '',
+          icon: nativeImage.createFromPath(iconPath),
+        }).show();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      if (DEVELOPER_MODE) console.warn('Failed to show notification', e);
+      return false;
+    }
+  });
+
+  handleIpc('open-dev-console', async () => {
+    try {
+      const logsDir = path.join(app.getPath('userData'), 'ispoofer_logs');
+      const files = await fs.readdir(logsDir);
+      const logFiles = files.filter((f) => f.startsWith('debug-') && f.endsWith('.txt')).sort();
+      if (logFiles.length === 0) return false;
+      const latestLog = path.join(logsDir, logFiles[logFiles.length - 1]);
+
+      const { exec } = require('node:child_process');
+      if (process.platform === 'win32') {
+        exec(`start powershell -NoExit -Command "Get-Content -Path '${latestLog}' -Wait"`);
+      } else if (process.platform === 'darwin') {
+        exec(
+          `osascript -e 'tell application "Terminal" to do script "tail -f \\"${latestLog}\\""'`,
+        );
+      } else {
+        exec(`x-terminal-emulator -e "tail -f '${latestLog}'"`);
+      }
+      return true;
+    } catch (e) {
+      if (DEVELOPER_MODE) console.warn('Failed to open dev console', e);
+      return false;
+    }
   });
 
   onIpc('open-external', (event, url) => {
@@ -272,6 +465,38 @@ function registerIpcHandlers(
   });
 
   onIpc('run-spoofer-action', async (event, data) => {
+    const originalConsoleLog = console.log;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleError = console.error;
+
+    const formatArgs = (args) =>
+      args
+        .map((a) => {
+          if (a instanceof Error) return a.stack || a.message || String(a);
+          if (typeof a === 'object') {
+            try {
+              return JSON.stringify(a);
+            } catch (e) {
+              return String(a);
+            }
+          }
+          return String(a);
+        })
+        .join(' ');
+
+    console.log = (...args) => {
+      originalConsoleLog(...args);
+      sendSpooferLog({ level: 'info', message: formatArgs(args) });
+    };
+    console.warn = (...args) => {
+      originalConsoleWarn(...args);
+      sendSpooferLog({ level: 'warn', message: formatArgs(args) });
+    };
+    console.error = (...args) => {
+      originalConsoleError(...args);
+      sendSpooferLog({ level: 'error', message: formatArgs(args) });
+    };
+
     try {
       await handleSpooferAction(
         data,
@@ -279,6 +504,8 @@ function registerIpcHandlers(
         sendTransferUpdate,
         sendSpooferResultToRenderer,
         sendStatusMessage,
+        sendSpooferLog,
+        sendSpooferProgress,
       );
     } catch (err) {
       if (err?.message === 'Operation cancelled') {
@@ -288,7 +515,11 @@ function registerIpcHandlers(
       }
       console.error('Unhandled spoofer action error:', err);
       sendSpooferResultToRenderer({ output: `Unexpected error: ${err.message}`, success: false });
-      sendStatusMessage('Error: Unexpected failure');
+      sendStatusMessage('Error occurred');
+    } finally {
+      console.log = originalConsoleLog;
+      console.warn = originalConsoleWarn;
+      console.error = originalConsoleError;
     }
   });
 
@@ -387,6 +618,8 @@ async function handleSpooferAction(
   sendTransferUpdate,
   sendSpooferResultToRenderer,
   sendStatusMessage,
+  sendSpooferLog,
+  sendSpooferProgress,
 ) {
   data = normalizePayload(data);
 
@@ -442,14 +675,6 @@ async function handleSpooferAction(
     }
   } else if (DEVELOPER_MODE) {
     console.log('(Dev) Skipping auto-clear: using user-selected download folder', downloadsDir);
-  }
-
-  if (!data.enableSpoofing && !data.downloadOnly) {
-    sendSpooferResultToRenderer({
-      output: 'Enable Spoofing toggle is OFF and Download-Only mode is not enabled.',
-      success: false,
-    });
-    return;
   }
 
   // Validate group ID is numeric if provided
@@ -696,7 +921,6 @@ async function handleSpooferAction(
   const batchItems = animationEntries.map((entry) => ({
     requestId: entry.id,
     assetId: parseInt(entry.id),
-    assetType: assetTypeName,
     creatorType: entry.creatorType,
     creatorId: entry.creatorId,
   }));
@@ -740,7 +964,11 @@ async function handleSpooferAction(
           checkCancelled();
           await checkPaused();
           const placeId = placeIdArray[placeIdIndex];
-          const itemsWithoutCreator = items.map(({ creatorType, creatorId, ...rest }) => rest);
+          const itemsWithoutCreator = items.map(({ creatorType, creatorId, ...rest }) => ({
+            ...rest,
+            placeId: placeId,
+            serverPlaceId: placeId,
+          }));
 
           if (DEVELOPER_MODE)
             console.log(
@@ -824,21 +1052,21 @@ async function handleSpooferAction(
             (loc) => loc.errors && loc.errors.length > 0 && loc.errors[0].code === 403,
           );
 
-          // Print detailed batch errors for visibility
+          // Print detailed batch errors for visibility (only in developer mode to prevent console spam)
           const errorItems = locations.filter((loc) => loc.errors && loc.errors.length > 0);
-          if (errorItems.length > 0) {
+          if (errorItems.length > 0 && DEVELOPER_MODE) {
             for (const locErr of errorItems) {
               const firstErr = locErr.errors[0] || {};
-              const errMsg = firstErr.Message || firstErr.message || JSON.stringify(firstErr);
-              console.warn(`Batch error for ${locErr.requestId} at place ${placeId}:`, firstErr);
-              if (DEVELOPER_MODE)
-                console.log(
-                  '(Dev) Full batch item with error:',
-                  JSON.stringify(locErr, null, 2).substring(0, 500),
-                );
+              console.warn(
+                `Batch error for ${locErr.requestId} at place ${placeId}:`,
+                JSON.stringify(firstErr),
+              );
+              console.log(
+                '(Dev) Full batch item with error:',
+                JSON.stringify(locErr, null, 2).substring(0, 500),
+              );
             }
           }
-
           if (hasBatchErrors) {
             if (placeIdIndex < placeIdArray.length - 1) {
               // Try next place ID
@@ -945,33 +1173,49 @@ async function handleSpooferAction(
 
   // Parallel downloads
   sendStatusMessage(`Downloading ${isSoundMode ? 'sounds' : 'animations'}...`);
+  const defaultDownloadLimit = 20;
+  let userDownloadLimit = data.concurrentUploads
+    ? data.maxConcurrentDownloads
+      ? parseInt(data.maxConcurrentDownloads, 10)
+      : defaultDownloadLimit
+    : defaultDownloadLimit;
+  const DOWNLOAD_CONCURRENCY = Math.min(userDownloadLimit, animationEntries.length);
+
   let downloadCompleted = 0;
   const downloadStartTime = Date.now();
-  const downloadPromises = animationEntries.map(async (entry) => {
+  const downloadOne = async (entry) => {
     checkCancelled();
     await checkPaused();
     const loc = locationsMap[entry.id];
     if (!loc) return { entry, success: false, error: 'No location in batch response' };
-    if (loc.errors && loc.errors.length > 0) {
-      const errorObj = loc.errors[0];
-      const errorMsg =
-        errorObj.Message || errorObj.message || JSON.stringify(errorObj) || 'Unknown';
-      if (DEVELOPER_MODE) console.log('Batch error for', entry.id, ':', errorObj);
-      return { entry, success: false, error: `Batch error: ${errorMsg}` };
-    }
-    if (!loc.locations || loc.locations.length === 0)
-      return { entry, success: false, error: 'No locations in batch response' };
-    const url = loc.locations[0].location;
     const sanitizedName = sanitizeFilename(entry.name);
     const fileExtension = isSoundMode ? '.ogg' : '.rbxm';
     const fileName = `${sanitizedName}_${entry.id}${fileExtension}`;
     const filePath = path.join(downloadsDir, fileName);
     const downloadTransfer = initialTransferStates.find((t) => t.originalAssetId === entry.id);
     const downloadTransferId = downloadTransfer.id;
-    sendTransferUpdate({ id: downloadTransferId, status: 'processing' });
     const creatorKey = `${entry.creatorType}:${entry.creatorId}`;
     const entryPlaceIds = placeIdMap[creatorKey] || [99840799534728];
     const entryPlaceId = Array.isArray(entryPlaceIds) ? entryPlaceIds[0] : entryPlaceIds;
+
+    if (loc.errors && loc.errors.length > 0) {
+      const errorObj = loc.errors[0];
+      const errorMsg =
+        errorObj.Message || errorObj.message || JSON.stringify(errorObj) || 'Unknown';
+      if (DEVELOPER_MODE) console.log('Batch error for', entry.id, ':', errorObj);
+
+      if (errorObj.code === 403) {
+        if (DEVELOPER_MODE) console.log(`(Dev) Skipping private asset ${entry.id}...`);
+        return { entry, success: false, error: 'Skipped (Private Asset)' };
+      }
+
+      return { entry, success: false, error: `Batch error: ${errorMsg}` };
+    }
+    if (!loc.locations || loc.locations.length === 0)
+      return { entry, success: false, error: 'No locations in batch response' };
+
+    const url = loc.locations[0].location;
+    sendTransferUpdate({ id: downloadTransferId, status: 'processing' });
     const result = await downloadAnimationAssetWithProgress(
       url,
       robloxCookie,
@@ -988,6 +1232,7 @@ async function handleSpooferAction(
       },
     );
     downloadCompleted++;
+    sendSpooferProgress({ current: downloadCompleted, total: animationEntries.length });
     const elapsed = (Date.now() - downloadStartTime) / 1000;
     const avgTimePerItem = elapsed / downloadCompleted;
     const remaining = animationEntries.length - downloadCompleted;
@@ -1004,8 +1249,12 @@ async function handleSpooferAction(
       success: result.success,
       error: result.error,
     };
-  });
-  const downloadResults = await Promise.all(downloadPromises);
+  };
+  const downloadResults = await runWithConcurrency(
+    animationEntries,
+    DOWNLOAD_CONCURRENCY,
+    downloadOne,
+  );
 
   // Resolve the authenticated user ID once before the upload loop (needed for user-owned uploads)
   let authenticatedUserId = null;
@@ -1031,43 +1280,48 @@ async function handleSpooferAction(
     sendStatusMessage('Download-only mode: Skipping uploads');
     if (DEVELOPER_MODE) console.log('(Dev) Download-only mode enabled, skipping all uploads');
   } else {
-    sendStatusMessage(`Uploading ${isSoundMode ? 'sounds' : 'animations'}...`);
+    const successfulDownloads = downloadResults.filter((r) => r.success);
+    
+    if (data.replaceExisting) {
+      sendStatusMessage('Looking for replacements...');
+      if (successfulDownloads.length > 0) {
+        const { findAssetByName } = require('./assets');
+        await findAssetByName(robloxCookie, isSoundMode ? 3 : 24, "___DUMMY_WARMUP___", data.groupId);
+      }
+      sendStatusMessage(`Replacing ${isSoundMode ? 'sounds' : 'animations'}...`);
+    } else {
+      sendStatusMessage(`Uploading ${isSoundMode ? 'sounds' : 'animations'}...`);
+    }
+
     let uploadCompleted = 0;
     const uploadStartTime = Date.now();
-    const successfulDownloads = downloadResults.filter((r) => r.success);
     // Open Cloud API rate limit is 60 req/min. With ~10s average async processing,
     // 10 concurrent slots stays safely under the limit.
-    const UPLOAD_CONCURRENCY = Math.min(10, successfulDownloads.length);
+    const defaultLimit = 10;
+    let userLimit = data.concurrentUploads
+      ? data.maxConcurrentUploads
+        ? parseInt(data.maxConcurrentUploads, 10)
+        : defaultLimit
+      : defaultLimit;
+    const UPLOAD_CONCURRENCY = Math.min(userLimit, successfulDownloads.length);
 
     // Worker pool: as soon as a slot finishes it picks up the next item immediately,
     // instead of waiting for a whole batch to finish before starting the next.
-    const runWithConcurrency = async (items, limit, worker) => {
-      const results = new Array(items.length);
-      let index = 0;
-      const workers = Array.from(
-        { length: Math.max(1, Math.min(limit, items.length)) },
-        async () => {
-          while (true) {
-            checkCancelled();
-            await checkPaused();
-            const current = index++;
-            if (current >= items.length) break;
-            results[current] = await worker(items[current]);
-          }
-        },
-      );
-      await Promise.all(workers);
-      return results;
-    };
-
     const uploadOne = async (downloadResult) => {
       const entry = downloadResult.entry;
       const filePath = downloadResult.filePath;
       const uploadTransferId = crypto.randomUUID();
       const fileSize = (await fs.stat(filePath).catch(() => ({ size: 0 }))).size;
+      let finalName = entry.name;
+      if (data.renameFind) {
+        finalName = finalName.split(data.renameFind).join(data.renameReplace || '');
+      }
+      if (data.renamePrefix) finalName = data.renamePrefix + finalName;
+      if (data.renameSuffix) finalName = finalName + data.renameSuffix;
+
       sendTransferUpdate({
         id: uploadTransferId,
-        name: entry.name,
+        name: finalName,
         originalAssetId: entry.id,
         status: 'queued',
         direction: 'upload',
@@ -1093,9 +1347,16 @@ async function handleSpooferAction(
       };
       const uploadFn = async () => {
         await checkPaused();
+        let finalName = entry.name;
+        if (data.renameFind) {
+          finalName = finalName.split(data.renameFind).join(data.renameReplace || '');
+        }
+        if (data.renamePrefix) finalName = data.renamePrefix + finalName;
+        if (data.renameSuffix) finalName = finalName + data.renameSuffix;
+
         const result = await publishAnimationRbxmWithProgress(
           filePath,
-          entry.name,
+          finalName,
           robloxCookie,
           csrfToken,
           data.groupId && String(data.groupId).trim() ? data.groupId : null,
@@ -1104,6 +1365,7 @@ async function handleSpooferAction(
           assetTypeName,
           data.apiKey || null,
           authenticatedUserId || null,
+          { replaceExisting: data.replaceExisting },
         );
         if (!result.success) throw new Error(result.error || 'Upload failed');
         return result;
@@ -1131,14 +1393,16 @@ async function handleSpooferAction(
         const etaMin = Math.floor(etaSeconds / 60);
         const etaSec = etaSeconds % 60;
         const etaStr = remaining > 0 ? ` (ETA: ${etaMin}:${String(etaSec).padStart(2, '0')})` : '';
+        const actionText = data.replaceExisting ? 'Processed' : 'Uploaded';
         sendStatusMessage(
-          `Uploaded ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
+          `${actionText} ${uploadCompleted}/${successfulDownloads.length} ${isSoundMode ? 'sounds' : 'animations'}${etaStr}`,
         );
         return {
           entry,
           success: uploadResult.success,
           assetId: uploadResult.assetId,
           error: uploadResult.error,
+          replacedId: uploadResult.replacedId,
         };
       } catch (finalRetryError) {
         sendTransferUpdate({
@@ -1169,7 +1433,6 @@ async function handleSpooferAction(
     verboseOutputMessage += `\n--- Asset: ${entry.name} (ID: ${entry.id}) ---\n`;
     if (downloadResult.success) {
       downloadedSuccessfullyCount++;
-      verboseOutputMessage += `✓ Downloaded: ${entry.name} (ID: ${entry.id}) to ${downloadResult.filePath}\n`;
 
       // Only process upload results if not in download-only mode
       if (!data.downloadOnly) {
@@ -1178,7 +1441,11 @@ async function handleSpooferAction(
           if (uploadResult.success) {
             successfulUploadCount++;
             uploadMappingOutput += `${entry.id} = ${uploadResult.assetId},\n`;
-            verboseOutputMessage += `✓ Uploaded ${isSoundMode ? 'Sound' : 'Animation'}: ${entry.name} (Original ID: ${entry.id}) -> New Asset ID: ${uploadResult.assetId}\n`;
+            if (uploadResult.replacedId) {
+              verboseOutputMessage += `Replaced Existing ${isSoundMode ? 'Sound' : 'Animation'}: ${entry.name} (Original ID: ${entry.id}) -> Overwrote Asset ID: ${uploadResult.replacedId}\n`;
+            } else {
+              verboseOutputMessage += `Uploaded ${isSoundMode ? 'Sound' : 'Animation'}: ${entry.name} (Original ID: ${entry.id}) -> New Asset ID: ${uploadResult.assetId}\n`;
+            }
           } else {
             console.error(
               `[${isSoundMode ? 'SOUND' : 'ANIMATION'} UPLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${uploadResult.error || 'Unknown upload error'}`,
@@ -1189,10 +1456,12 @@ async function handleSpooferAction(
           console.error(`[UPLOAD SKIPPED] ${entry.name} (ID: ${entry.id}): Download failed.`);
           verboseOutputMessage += `! Skipped Upload for ${entry.name}: Download failed.\n`;
         }
+      } else {
+        verboseOutputMessage += `Downloaded: ${entry.name} (ID: ${entry.id}) to ${downloadResult.filePath}\n`;
       }
     } else {
       console.error(`[DOWNLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${downloadResult.error}`);
-      verboseOutputMessage += `✗ Download Failed: ${entry.name} (ID: ${entry.id}) — ${downloadResult.error}\n`;
+      verboseOutputMessage += `Download Failed: ${entry.name} (ID: ${entry.id}) — ${downloadResult.error}\n`;
     }
   }
 
@@ -1308,9 +1577,30 @@ async function handleSpooferAction(
     }
   } catch {}
 
+  const hasSuccess = downloadedSuccessfullyCount > 0 || successfulUploadCount > 0;
+  const isFullySuccessful =
+    downloadedSuccessfullyCount === animationEntries.length &&
+    (data.downloadOnly || successfulUploadCount === downloadedSuccessfullyCount);
+
+  let jobStatus = 'error';
+  if (hasSuccess) {
+    jobStatus = isFullySuccessful ? 'success' : 'partial';
+  }
+
+  const jobRecord = {
+    id: crypto.randomUUID(),
+    timestamp: Date.now(),
+    status: jobStatus,
+    output: finalOutput,
+    payload: data,
+  };
+  await saveJobRecord(jobRecord);
+
   sendSpooferResultToRenderer({
     output: finalOutput,
-    success: downloadedSuccessfullyCount > 0 || successfulUploadCount > 0,
+    success: hasSuccess,
+    status: jobStatus,
+    job: jobRecord,
   });
 
   // Clear session on completion (all done or all failed — no point resuming)
@@ -1329,6 +1619,22 @@ async function handleSpooferAction(
     if (DEVELOPER_MODE) console.log('(Dev) Download-only mode: keeping files in', downloadsDir);
   }
 }
+
+const runWithConcurrency = async (items, limit, worker) => {
+  const results = new Array(items.length);
+  let index = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      checkCancelled();
+      await checkPaused();
+      const current = index++;
+      if (current >= items.length) break;
+      results[current] = await worker(items[current]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+};
 
 module.exports = {
   registerIpcHandlers,

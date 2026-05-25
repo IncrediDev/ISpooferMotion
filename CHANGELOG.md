@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.11
+
+- **Interactive Welcome Tour:** Added a interactive onboarding tour to guide new users through setting up their cookies, API keys, and run options.
+- **Advanced Asset Renaming:** You can now automatically rename your assets on upload using custom prefixes, suffixes, or find-and-replace rules (found in Settings -> Upload Engine Defaults).
+- **Replace Existing Assets:** Added a new toggle to overwrite your existing creations instead of uploading duplicates.
+- **Unified Roblox Plugin:** "Extract IDs" and "Replace IDs" are now housed together in a single window.
+- **UI Upgrades:** Polished the UI design across the entire application and plugin.
+- **Page Restorations:** Profiles, Settings, and Activity pages are now fully re-enabled with their complete feature sets.
+- **Bug Fixes:** Fixed various layout quirks and Spoofer bugs.
+
 ## v1.3.10-hotfix.1
 
 - Kept everything minimal until everything is PROVEN to work

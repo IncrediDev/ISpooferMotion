@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Notification, nativeImage } = require('electron');
 
 let mainWindow = null;
 
@@ -15,7 +15,8 @@ const WINDOW_OPTIONS = Object.freeze({
 });
 
 function resolveAssetPath(fileName) {
-  return path.join(__dirname, '..', 'assets', fileName);
+  const assetPath = path.join(__dirname, '..', 'assets', fileName);
+  return app.isPackaged ? assetPath.replace('app.asar', 'app.asar.unpacked') : assetPath;
 }
 
 function getIconPath() {
@@ -29,7 +30,7 @@ function getPreloadPath() {
 }
 
 function getRendererPath() {
-  return path.join(__dirname, '..', 'renderer', 'index.html');
+  return path.join(__dirname, '..', 'renderer-react', 'dist', 'index.html');
 }
 
 /**
@@ -41,9 +42,11 @@ function createWindow() {
     return mainWindow;
   }
 
+  const windowIcon = nativeImage.createFromPath(getIconPath());
+
   mainWindow = new BrowserWindow({
     ...WINDOW_OPTIONS,
-    icon: getIconPath(),
+    icon: windowIcon,
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
@@ -82,6 +85,14 @@ function getMainWindow() {
 function setupAppLifecycle() {
   const ready = app.whenReady().then(() => {
     createWindow();
+
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'ISpooferMotion',
+        body: 'ISpooferMotion Opened',
+        icon: nativeImage.createFromPath(getIconPath()),
+      }).show();
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

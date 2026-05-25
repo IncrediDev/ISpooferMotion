@@ -30,9 +30,7 @@ function expandPattern(pattern) {
     const [segment, ...next] = remaining;
     if (!fs.existsSync(directory)) return;
 
-    const escaped = segment
-      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*');
+    const escaped = segment.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
     const matcher = new RegExp(`^${escaped}$`);
 
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -47,13 +45,16 @@ function expandPattern(pattern) {
   return matches;
 }
 
-const files = process.argv.slice(2).flatMap(expandPattern).filter((file) => {
-  try {
-    return fs.statSync(file).isFile();
-  } catch {
-    return false;
-  }
-});
+const files = process.argv
+  .slice(2)
+  .flatMap(expandPattern)
+  .filter((file) => {
+    try {
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  });
 
 if (!files.length) {
   console.error('No test files matched.');

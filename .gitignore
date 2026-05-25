@@ -1,11 +1,8 @@
 # Dependencies
 node_modules/
-launcher/node_modules/
 .npm-cache/
-launcher/.npm-cache/
 
 # Build output
-dist/
 out/
 release/
 plugin-build/
@@ -18,12 +15,11 @@ dist-plugin/
 *.snap
 *.blockmap
 *.rbxmx
+*.txt
 
 # Private local tests
 tests/
 tests/**
-launcher/specs/
-launcher/specs/**
 
 # Electron/build caches
 .cache/
@@ -32,11 +28,6 @@ launcher/specs/**
 .turbo/
 *.tsbuildinfo
 node_modules/.cache/
-launcher/node_modules/.cache/
-launcher/dist/
-launcher/out/
-launcher/.cache/
-launcher/.vite/
 
 # Runtime/generated data
 temp/
@@ -48,14 +39,12 @@ tmp/
 *.old
 *.log
 logs/
-launcher/logs/
 
 # Local config and secrets
 .env
 .env.*
 !.env.example
 *.local
-launcher-settings.json
 settings.json
 profiles.json
 session.json
@@ -99,4 +88,4 @@ desktop.ini
 .prettierignore
 .prettierrc
 /.vscode
-/dev
+/dist

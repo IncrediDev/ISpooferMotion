@@ -42,10 +42,7 @@ function readJson(file) {
   }
 }
 
-assertOne(
-  'launcher setup exe',
-  globFiles('launcher/dist', (name) => /^ISpooferMotion-Setup.*\.exe$/i.test(name)),
-);
+
 assertOne(
   'managed app exe',
   globFiles(

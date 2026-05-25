@@ -74,12 +74,26 @@ const attempts = [
   },
   {
     label: 'npm ci --ignore-scripts --no-audit --no-fund --legacy-peer-deps (attempt 2/3)',
-    args: ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--prefer-online', '--legacy-peer-deps'],
+    args: [
+      'ci',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      '--prefer-online',
+      '--legacy-peer-deps',
+    ],
     cleanBefore: true,
   },
   {
     label: 'npm install --ignore-scripts --no-audit --no-fund (fallback attempt 3/3)',
-    args: ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefer-online', '--legacy-peer-deps'],
+    args: [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      '--prefer-online',
+      '--legacy-peer-deps',
+    ],
     cleanBefore: true,
   },
 ];

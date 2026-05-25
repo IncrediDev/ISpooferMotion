@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const includeDirs = ['src', 'scripts', 'launcher/src', 'launcher/scripts'];
+const includeDirs = ['src', 'scripts'];
 const skipNames = new Set(['node_modules', 'dist', 'out', 'build', '.git']);
 const errors = [];
 
@@ -46,37 +46,30 @@ for (const dir of includeDirs) {
   for (const file of collectJavaScriptFiles(path.join(root, dir))) checkFile(file);
 }
 
-for (const relativePath of ['package.json', 'package-lock.json', 'launcher/package.json', 'launcher/package-lock.json']) {
+for (const relativePath of ['package.json', 'package-lock.json']) {
   readJson(relativePath);
 }
 
 const pkg = readJson('package.json');
 const lock = readJson('package-lock.json');
-const launcherPkg = readJson('launcher/package.json');
-const launcherLock = readJson('launcher/package-lock.json');
 
 if (pkg && lock) {
   const lockRoot = lock.packages && lock.packages[''];
   if (!lockRoot) errors.push('package-lock.json is missing packages[""].');
   else {
     if (lockRoot.version !== pkg.version) {
-      errors.push(`package-lock.json version ${lockRoot.version} does not match package.json ${pkg.version}.`);
+      errors.push(
+        `package-lock.json version ${lockRoot.version} does not match package.json ${pkg.version}.`,
+      );
     }
     for (const section of ['dependencies', 'devDependencies']) {
       const expected = pkg[section] || {};
       const actual = lockRoot[section] || {};
       for (const [name, range] of Object.entries(expected)) {
-        if (actual[name] !== range) errors.push(`package-lock.json ${section}.${name} does not match package.json.`);
+        if (actual[name] !== range)
+          errors.push(`package-lock.json ${section}.${name} does not match package.json.`);
       }
     }
-  }
-}
-
-if (launcherPkg && launcherLock) {
-  const lockRoot = launcherLock.packages && launcherLock.packages[''];
-  if (!lockRoot) errors.push('launcher/package-lock.json is missing packages[""].');
-  else if (lockRoot.version !== launcherPkg.version) {
-    errors.push(`launcher/package-lock.json version ${lockRoot.version} does not match launcher/package.json ${launcherPkg.version}.`);
   }
 }
 
@@ -84,22 +77,18 @@ const requiredFiles = [
   'src/main/app.js',
   'src/main/window.js',
   'src/preload/preload.js',
-  'src/renderer/index.html',
-  'src/renderer/styles/app.css',
+  'src/renderer-react/index.html',
+  'src/renderer-react/src/styles/app.css',
   'src/plugin/plugin.lua',
-  'src/plugin/modules/GetIdsUIFactory.lua',
-  'src/plugin/modules/ReplaceIdsUIFactory.lua',
   'src/assets/app_icon.ico',
   'src/assets/app_icon.png',
-  'launcher/src/main/main.js',
-  'launcher/src/preload/preload.js',
-  'launcher/src/assets/app_icon.ico',
-  'launcher/src/assets/app_icon.png',
+
   'build/entitlements.mac.plist',
 ];
 
 for (const relativePath of requiredFiles) {
-  if (!fs.existsSync(path.join(root, relativePath))) errors.push(`Missing required file: ${relativePath}`);
+  if (!fs.existsSync(path.join(root, relativePath)))
+    errors.push(`Missing required file: ${relativePath}`);
 }
 
 if (errors.length) {
