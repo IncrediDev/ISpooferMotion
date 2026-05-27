@@ -44,7 +44,6 @@ export default function SettingsView({ isActive }) {
 
   // Settings states
   const [notifications, setNotifications] = useState(true);
-  const [animations, setAnimations] = useState(true);
   const [defRetries, setDefRetries] = useState(3);
   const [defDelay, setDefDelay] = useState(5000);
   const [renameToggle, setRenameToggle] = useState(false);
@@ -61,6 +60,7 @@ export default function SettingsView({ isActive }) {
   const [color, setColor] = useState({ r: 76, g: 175, b: 80 });
 
   const [clearText, setClearText] = useState('Clear');
+  const [uninstallStatus, setUninstallStatus] = useState('');
 
   const colorPickerRef = useRef(null);
 
@@ -72,7 +72,6 @@ export default function SettingsView({ isActive }) {
       const profile = secrets.profiles[secrets.activeProfileId] || {};
 
       setNotifications(profile.notifications ?? true);
-      setAnimations(profile.animations ?? true);
       setDefRetries(profile.defRetries ?? 3);
       setDefDelay(profile.defDelay ?? 5000);
       setConcurrent(profile.concurrent ?? false);
@@ -126,6 +125,28 @@ export default function SettingsView({ isActive }) {
 
   const startTour = () => {
     window.dispatchEvent(new Event('start-tour'));
+  };
+
+  const uninstallApp = async () => {
+    if (
+      !window.confirm(
+        'Are you sure you want to uninstall ISpooferMotion? This will delete all your settings, profiles, and data.',
+      )
+    ) {
+      return;
+    }
+
+    setUninstallStatus('Starting uninstaller...');
+    try {
+      const result = await window.electronAPI?.uninstallApp?.();
+      if (result === true || result?.ok) {
+        setUninstallStatus(result?.message || 'Uninstaller started.');
+        return;
+      }
+      setUninstallStatus(result?.message || 'Could not start the uninstaller.');
+    } catch (error) {
+      setUninstallStatus(error.message || 'Could not start the uninstaller.');
+    }
   };
 
   // Close color picker on click outside
@@ -232,23 +253,17 @@ export default function SettingsView({ isActive }) {
                     <i></i>
                   </span>
                 </label>
-                <label className="option-row" htmlFor="setting-animations">
-                  <span>UI Animations</span>
-                  <span className="switch">
-                    <input
-                      type="checkbox"
-                      id="setting-animations"
-                      checked={animations}
-                      onChange={e => {
-                        setAnimations(e.target.checked);
-                        updateSetting('animations', e.target.checked);
-                        if (e.target.checked) document.body.classList.remove('no-animations');
-                        else document.body.classList.add('no-animations');
-                      }}
-                    />
-                    <i></i>
-                  </span>
-                </label>
+                <div className="action-item" style={{ borderBottom: 'none', padding: 0 }}>
+                  <span>Welcome Tour</span>
+                  <button
+                    className="ui-button"
+                    type="button"
+                    id="btn-start-tour"
+                    onClick={startTour}
+                  >
+                    Replay Welcome Tour
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -287,33 +302,11 @@ export default function SettingsView({ isActive }) {
                     className="ui-button ui-button-danger"
                     type="button"
                     id="btn-uninstall-app"
-                    onClick={async () => {
-                      if (window.confirm('Are you sure you want to uninstall ISpooferMotion? This will delete all your settings, profiles, and data.')) {
-                        await window.electronAPI?.uninstallApp?.();
-                      }
-                    }}
+                    onClick={uninstallApp}
                   >
                     Uninstall
                   </button>
-                </div>
-              </div>
-            </div>
-            <div className="bento-card settings-card" style={{ marginTop: '16px' }}>
-              <div className="settings-header">
-                <h3>Welcome Tour</h3>
-                <p>Replay the app's interactive onboarding experience.</p>
-              </div>
-              <div className="settings-actions-list">
-                <div className="action-item" style={{ borderBottom: 'none' }}>
-                  <button
-                    className="ui-button primary-action"
-                    type="button"
-                    id="btn-start-tour"
-                    style={{ width: '100%', height: '36px', padding: '0' }}
-                    onClick={startTour}
-                  >
-                    Replay Welcome Tour
-                  </button>
+                  {uninstallStatus && <span className="field-status">{uninstallStatus}</span>}
                 </div>
               </div>
             </div>

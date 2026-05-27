@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import appIcon from '../assets/app_icon.png';
 
 export default function Sidebar({ currentView, setCurrentView }) {
-  const [version, setVersion] = useState('v1.3.11');
+  const [version, setVersion] = useState('v1.3.12');
   const [source, setSource] = useState('Release source...');
 
   useEffect(() => {

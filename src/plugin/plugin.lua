@@ -32,74 +32,19 @@ local function isOperationCurrent(operationId)
   return isProcessing and activeOperationId == operationId
 end
 
-local DIRECT_YIELD_BATCH         = 4096
-local SCRIPT_YIELD_BATCH         = 512
-local PRODUCT_INFO_WORKERS_MAX   = 512
+local DIRECT_YIELD_BATCH         = 2000
+local SCRIPT_YIELD_BATCH         = 500
+local PRODUCT_INFO_WORKERS_MAX   = 30
 local PRODUCT_INFO_MAX_RETRIES   = 3
-local UI_PROGRESS_INTERVAL       = 0.12
-local SOURCE_READ_WORKERS        = 256
-local REPLACE_SOURCE_WORKERS     = 64
-local CACHE_TTL                  = 86400
-local CACHE_SETTING_KEY          = "ISM_ProductInfoCache_v3"
-local SCRIPT_CACHE_SETTING_KEY   = "ISM_ScriptSourceCache_v1"
-local PERSIST_CACHE_MIN_INTERVAL = 60
-local SCAN_RESULT_CACHE_TTL      = 45
-local NEGATIVE_CACHE_TTL         = 21600
-local SCRIPT_CACHE_TTL           = 86400
-local SCRIPT_CACHE_MAX_ENTRIES   = 2000
+local UI_PROGRESS_INTERVAL       = 0.10
+local SOURCE_READ_WORKERS        = 200
+local REPLACE_SOURCE_WORKERS     = 100
 local DEBUG_REPLACED_PATH_LIMIT  = 500
-
-local productInfoCache           = {}
-local productInfoCacheDirty      = false
-local lastPersistTime            = 0
-local persistedScriptSourceCache = {}
-local scriptSourceCacheDirty     = false
-local lastScriptPersistTime      = 0
-
-local lastScanResults            = nil
-local lastScanTime               = 0
 
 local PLUGIN_VERSION = "__ISPOOFERMOTION_VERSION__"
 if PLUGIN_VERSION:match("^__") then PLUGIN_VERSION = "dev" end
 
 local IGNORED_ANIMATION_CREATOR_USER_IDS = { [1] = true }
-
-local function getProjectCacheKey()
-  return tostring(game.GameId or 0) .. ":" .. tostring(game.PlaceId or 0)
-end
-
-local function loadPersistedCache()
-  local ok, data = pcall(function() return plugin:GetSetting(CACHE_SETTING_KEY) end)
-  if not (ok and type(data) == "table") then return end
-
-  local now = os.time()
-  for assetId, entry in pairs(data) do
-    if type(entry) == "table" and type(entry.t) == "number" and entry.v ~= nil then
-      local ttl = (entry.v == false) and NEGATIVE_CACHE_TTL or CACHE_TTL
-      if now - entry.t < ttl then
-        productInfoCache[assetId] = entry.v
-      end
-    end
-  end
-end
-
-local function persistCache(force)
-  if not productInfoCacheDirty and not force then return end
-  local now = os.time()
-  if not force and now - lastPersistTime < PERSIST_CACHE_MIN_INTERVAL then return end
-
-  lastPersistTime = now
-  local toSave = {}
-
-  for assetId, value in pairs(productInfoCache) do
-    if value ~= nil then
-      toSave[assetId] = { t = now, v = value }
-    end
-  end
-
-  local ok = pcall(function() plugin:SetSetting(CACHE_SETTING_KEY, toSave) end)
-  if ok then productInfoCacheDirty = false end
-end
 
 local function mapToSortedList(map)
   local list = {}
@@ -108,80 +53,8 @@ local function mapToSortedList(map)
   return list
 end
 
-local function listToMap(list)
-  local map = {}
-  if type(list) == "table" then
-    for _, id in ipairs(list) do
-      id = tostring(id or ""):match("^(%d+)$")
-      if id then map[id] = true end
-    end
-  end
-  return map
-end
-
-local function loadPersistedScriptSourceCache()
-  local ok, data = pcall(function() return plugin:GetSetting(SCRIPT_CACHE_SETTING_KEY) end)
-  if not (ok and type(data) == "table") then return end
-  if data.projectKey ~= getProjectCacheKey() or type(data.entries) ~= "table" then return end
-
-  local now = os.time()
-  for path, entry in pairs(data.entries) do
-    if type(path) == "string" and type(entry) == "table" and type(entry.t) == "number" and type(entry.fp) == "string" then
-      if now - entry.t < SCRIPT_CACHE_TTL then
-        persistedScriptSourceCache[path] = {
-          t = entry.t,
-          fp = entry.fp,
-          animation = listToMap(entry.animation),
-          sound = listToMap(entry.sound),
-        }
-      end
-    end
-  end
-end
-
-local function persistScriptSourceCache(force)
-  if not scriptSourceCacheDirty and not force then return end
-  local now = os.time()
-  if not force and now - lastScriptPersistTime < PERSIST_CACHE_MIN_INTERVAL then return end
-
-  lastScriptPersistTime = now
-  local entries = {}
-  local count = 0
-
-  for path, entry in pairs(persistedScriptSourceCache) do
-    if count >= SCRIPT_CACHE_MAX_ENTRIES then break end
-    if type(entry) == "table" and type(entry.fp) == "string" and now - (entry.t or 0) < SCRIPT_CACHE_TTL then
-      entries[path] = {
-        t = entry.t or now,
-        fp = entry.fp,
-        animation = mapToSortedList(entry.animation),
-        sound = mapToSortedList(entry.sound),
-      }
-      count += 1
-    end
-  end
-
-  local ok = pcall(function()
-    plugin:SetSetting(SCRIPT_CACHE_SETTING_KEY, {
-      projectKey = getProjectCacheKey(),
-      savedAt = now,
-      entries = entries,
-    })
-  end)
-
-  if ok then scriptSourceCacheDirty = false end
-end
-
-loadPersistedCache()
-loadPersistedScriptSourceCache()
-
-local scriptSourceCache = {}
-
-local function sourceFingerprint(source)
-  return #source .. ":" .. source:sub(1, 24) .. ":" .. source:sub(-48)
-end
-
 local scanHitLists = { animation = {}, sound = {} }
+local lastScanCandidateCounts = { animation = 0, sound = 0 }
 
 local sharedState = {
   stage = "scan", count = 0, total = 0, processed = 0, done = false,
@@ -323,6 +196,20 @@ local function collectIdsFromTextValue(value, targetIds)
   for id in text:gmatch("[?&]id=(%d+)")           do addAssetId(targetIds, id) end
   local bareId = text:match("^%s*(%d+)%s*$")
   if bareId then addAssetId(targetIds, bareId) end
+end
+
+local function collectExplicitAssetReferences(source, idsByKind, wantAnim, wantSound)
+  local function addTypedCandidate(id)
+    if wantAnim then addAssetId(idsByKind.animation, id) end
+    if wantSound then addAssetId(idsByKind.sound, id) end
+  end
+
+  for id in tostring(source or ""):gmatch("rbxassetid://%s*(%d+)") do
+    addTypedCandidate(id)
+  end
+  for id in tostring(source or ""):gmatch("[?&]id=(%d+)") do
+    addTypedCandidate(id)
+  end
 end
 
 local function collectPropertyIds(source, propertyName, targetIds)
@@ -512,6 +399,7 @@ local function extractAssetIdsByKind(source, wantAnim, wantSound)
   end
 
   if wantAnim or wantSound then
+    collectExplicitAssetReferences(text, idsByKind, wantAnim, wantSound)
     collectContextualIds(text, "rbxassetid://%s*(%d+)", idsByKind, wantAnim, wantSound)
     collectContextualIds(text, "[?&]id=(%d+)",           idsByKind, wantAnim, wantSound)
     collectBareNumberIds(text, idsByKind, wantAnim, wantSound)
@@ -730,31 +618,16 @@ end
 
 -- Asset catalog
 
-local function getProductInfoCached(assetId)
-  local cached = productInfoCache[assetId]
-  if cached ~= nil then
-    if cached == false then return nil end
-    return cached
-  end
-
-  local info = nil
+local function getProductInfoFresh(assetId)
   for attempt = 1, PRODUCT_INFO_MAX_RETRIES do
     local success, result = pcall(function() return marketplace:GetProductInfo(tonumber(assetId)) end)
     if success and result then
-      info = result
-      break
+      return result
     end
     if attempt < PRODUCT_INFO_MAX_RETRIES then task.wait(0.1 * (2 ^ attempt)) end
   end
 
-  if info then
-    productInfoCache[assetId] = info
-  else
-    productInfoCache[assetId] = false
-  end
-
-  productInfoCacheDirty = true
-  return info
+  return nil
 end
 
 local function getCreatorTargetId(info)
@@ -780,102 +653,12 @@ local function spawnHeartbeatReporter(state, onProgress)
   end)
 end
 
--- Scan index
-
-local scanIndex = {
-  ready = false,
-  building = false,
-  watchersStarted = false,
-  animationCandidates = {},
-  soundCandidates = {},
-  animationCounts = {},
-  soundCounts = {},
-  objectEntries = {},
-  objectConnections = {},
-  rootConnections = {},
-  pendingObjects = {},
-}
+-- Fresh scan helpers
 
 local function countMap(map)
   local count = 0
   for _ in pairs(map) do count += 1 end
   return count
-end
-
-local function disconnectIndexedObject(obj)
-  local connections = scanIndex.objectConnections[obj]
-  if not connections then return end
-  disconnectConnections(connections)
-  scanIndex.objectConnections[obj] = nil
-end
-
-local function clearIndexedObject(obj)
-  local entry = scanIndex.objectEntries[obj]
-  if not entry then return end
-
-  for assetId in pairs(entry.animation) do
-    local current = scanIndex.animationCounts[assetId] or 0
-    if current <= 1 then
-      scanIndex.animationCounts[assetId] = nil
-      scanIndex.animationCandidates[assetId] = nil
-    else
-      scanIndex.animationCounts[assetId] = current - 1
-    end
-  end
-
-  for assetId in pairs(entry.sound) do
-    local current = scanIndex.soundCounts[assetId] or 0
-    if current <= 1 then
-      scanIndex.soundCounts[assetId] = nil
-      scanIndex.soundCandidates[assetId] = nil
-    else
-      scanIndex.soundCounts[assetId] = current - 1
-    end
-  end
-
-  scanIndex.objectEntries[obj] = nil
-  scanHitLists.animation[obj] = nil
-  scanHitLists.sound[obj] = nil
-  lastScanResults = nil
-end
-
-local function resetScanIndex()
-  local objectsWithConnections = {}
-  for obj in pairs(scanIndex.objectConnections) do
-    table.insert(objectsWithConnections, obj)
-  end
-  for _, obj in ipairs(objectsWithConnections) do
-    disconnectIndexedObject(obj)
-  end
-
-  table.clear(scanIndex.animationCandidates)
-  table.clear(scanIndex.soundCandidates)
-  table.clear(scanIndex.animationCounts)
-  table.clear(scanIndex.soundCounts)
-  table.clear(scanIndex.objectEntries)
-  table.clear(scanIndex.pendingObjects)
-  table.clear(scanHitLists.animation)
-  table.clear(scanHitLists.sound)
-  lastScanResults = nil
-end
-
-local function addIndexedObjectId(entry, obj, kind, assetId)
-  assetId = tostring(assetId or ""):match("^(%d+)$")
-  if not assetId then return end
-
-  if kind == "animation" then
-    if entry.animation[assetId] then return end
-    entry.animation[assetId] = true
-    scanIndex.animationCounts[assetId] = (scanIndex.animationCounts[assetId] or 0) + 1
-    scanIndex.animationCandidates[assetId] = true
-    scanHitLists.animation[obj] = true
-  elseif kind == "sound" then
-    if entry.sound[assetId] then return end
-    entry.sound[assetId] = true
-    scanIndex.soundCounts[assetId] = (scanIndex.soundCounts[assetId] or 0) + 1
-    scanIndex.soundCandidates[assetId] = true
-    scanHitLists.sound[obj] = true
-  end
 end
 
 local function collectIdsFromObject(obj)
@@ -892,40 +675,10 @@ local function collectIdsFromObject(obj)
 
   elseif obj:IsA("LuaSourceContainer") then
     local ok, source = pcall(function() return obj.Source end)
-    if ok and source and #source >= 20 then
+    if ok and source and source ~= "" then
       local hasA, hasS = detectSourceKindSignals(source)
       if hasA or hasS then
-        local fp = sourceFingerprint(source)
-        local cached = scriptSourceCache[obj]
-        local path = obj:GetFullName()
-        local persisted = persistedScriptSourceCache[path]
-        local extractedByKind
-
-        if cached and cached.fp == fp and cached.animation ~= nil and cached.sound ~= nil then
-          extractedByKind = cached
-        elseif persisted and persisted.fp == fp and persisted.animation ~= nil and persisted.sound ~= nil then
-          extractedByKind = {
-            fp = fp,
-            animation = persisted.animation,
-            sound = persisted.sound,
-          }
-          scriptSourceCache[obj] = extractedByKind
-        else
-          extractedByKind = extractAssetIdsByKind(source, hasA, hasS)
-          scriptSourceCache[obj] = {
-            fp = fp,
-            animation = extractedByKind.animation,
-            sound = extractedByKind.sound,
-          }
-          persistedScriptSourceCache[path] = {
-            t = os.time(),
-            fp = fp,
-            animation = extractedByKind.animation,
-            sound = extractedByKind.sound,
-          }
-          scriptSourceCacheDirty = true
-        end
-
+        local extractedByKind = extractAssetIdsByKind(source, hasA, hasS)
         for id in pairs(extractedByKind.animation) do addAssetId(idsByKind.animation, id) end
         for id in pairs(extractedByKind.sound) do addAssetId(idsByKind.sound, id) end
       end
@@ -963,217 +716,8 @@ local function collectIdsFromObject(obj)
   return idsByKind
 end
 
-local function indexObject(obj)
-  if not obj or not obj.Parent then return end
-
-  local idsByKind = collectIdsFromObject(obj)
-  clearIndexedObject(obj)
-
-  local entry = { animation = {}, sound = {} }
-  for id in pairs(idsByKind.animation) do
-    addIndexedObjectId(entry, obj, "animation", id)
-  end
-  for id in pairs(idsByKind.sound) do
-    addIndexedObjectId(entry, obj, "sound", id)
-  end
-
-  if next(entry.animation) or next(entry.sound) then
-    scanIndex.objectEntries[obj] = entry
-  end
-
-  lastScanResults = nil
-end
-
-local function scheduleIndexObject(obj)
-  if not scanIndex.ready or not obj then return end
-  if scanIndex.pendingObjects[obj] then return end
-
-  scanIndex.pendingObjects[obj] = true
-  task.spawn(function()
-    scanIndex.pendingObjects[obj] = nil
-    if obj.Parent then
-      indexObject(obj)
-    else
-      clearIndexedObject(obj)
-      disconnectIndexedObject(obj)
-    end
-  end)
-end
-
-local function isDirectIndexWatchCandidate(obj)
-  local className = obj.ClassName
-  return className == "Animation"
-      or className == "Sound"
-      or className == "StringValue"
-      or className == "NumberValue"
-      or className == "IntValue"
-      or obj:IsA("LuaSourceContainer")
-end
-
-local function attachIndexWatchers(obj)
-  if scanIndex.objectConnections[obj] then return end
-
-  local connections = {}
-  local function connectSignal(signal)
-    if signal then
-      table.insert(connections, signal:Connect(function()
-        scheduleIndexObject(obj)
-      end))
-    end
-  end
-
-  local className = obj.ClassName
-  if className == "Animation" then
-    connectSignal(obj:GetPropertyChangedSignal("AnimationId"))
-  elseif className == "Sound" then
-    connectSignal(obj:GetPropertyChangedSignal("SoundId"))
-  elseif className == "StringValue" or className == "NumberValue" or className == "IntValue" then
-    connectSignal(obj:GetPropertyChangedSignal("Value"))
-  elseif obj:IsA("LuaSourceContainer") then
-    local ok, signal = pcall(function() return obj:GetPropertyChangedSignal("Source") end)
-    if ok then connectSignal(signal) end
-  end
-
-  -- AttributeChanged is only attached to objects already known to contain asset IDs.
-  -- This avoids thousands of live connections on unrelated parts, models, folders, and UI objects.
-  if scanIndex.objectEntries[obj] then
-    local okAttr, attrConnection = pcall(function()
-      return obj.AttributeChanged:Connect(function()
-        scheduleIndexObject(obj)
-      end)
-    end)
-    if okAttr and attrConnection then table.insert(connections, attrConnection) end
-  end
-
-  if #connections > 0 then
-    scanIndex.objectConnections[obj] = connections
-  end
-end
-
-local function startScanIndexWatchers()
-  if scanIndex.watchersStarted then return end
-  scanIndex.watchersStarted = true
-
-  table.insert(scanIndex.rootConnections, game.DescendantAdded:Connect(function(obj)
-    if isDirectIndexWatchCandidate(obj) then
-      attachIndexWatchers(obj)
-    end
-    scheduleIndexObject(obj)
-  end))
-
-  table.insert(scanIndex.rootConnections, game.DescendantRemoving:Connect(function(obj)
-    clearIndexedObject(obj)
-    disconnectIndexedObject(obj)
-    lastScanResults = nil
-  end))
-end
-
-local function buildScanIndex(onProgress, shouldCancel)
-  scanIndex.ready = false
-  scanIndex.building = true
-  resetScanIndex()
-
-  local descendants = game:GetDescendants()
-  local total = #descendants
-  resetSharedState("scan", total)
-  spawnHeartbeatReporter(sharedState, onProgress)
-
-  if total == 0 then
-    sharedState.done = true
-    scanIndex.ready = true
-    scanIndex.building = false
-    startScanIndexWatchers()
-    return
-  end
-
-  local directObjects = {}
-  local valueObjects = {}
-  local attributeObjects = {}
-  local scriptObjects = {}
-
-  for _, obj in ipairs(descendants) do
-    local className = obj.ClassName
-    if className == "Animation" or className == "Sound" then
-      table.insert(directObjects, obj)
-    elseif className == "StringValue" or className == "NumberValue" or className == "IntValue" then
-      table.insert(valueObjects, obj)
-    elseif obj:IsA("LuaSourceContainer") then
-      table.insert(scriptObjects, obj)
-    else
-      table.insert(attributeObjects, obj)
-    end
-  end
-
-  local processed = 0
-
-  local function processObjectList(objects, workerLimit)
-    if shouldCancel and shouldCancel() then return end
-    if #objects == 0 then return end
-
-    local nextIndex = 0
-    local doneWorkers = 0
-    local workerCount = math.min(workerLimit, #objects)
-
-    local function claimNextObject()
-      if shouldCancel and shouldCancel() then return nil end
-      nextIndex += 1
-      return objects[nextIndex]
-    end
-
-    for _ = 1, workerCount do
-      task.spawn(function()
-        while true do
-          local obj = claimNextObject()
-          if not obj then break end
-
-          indexObject(obj)
-          attachIndexWatchers(obj)
-
-          processed += 1
-          sharedState.processed = processed
-          if processed % 50 == 0 then
-            sharedState.count = countMap(scanIndex.animationCandidates) + countMap(scanIndex.soundCandidates)
-          end
-
-          if processed % SCRIPT_YIELD_BATCH == 0 then task.wait() end
-        end
-        doneWorkers += 1
-      end)
-    end
-
-    while doneWorkers < workerCount do task.wait() end
-  end
-
-  -- Cheap exact properties first, then values/attributes, then expensive script source reads last.
-  processObjectList(directObjects, SOURCE_READ_WORKERS)
-  processObjectList(valueObjects, SOURCE_READ_WORKERS)
-  processObjectList(attributeObjects, SOURCE_READ_WORKERS)
-  processObjectList(scriptObjects, SOURCE_READ_WORKERS)
-
-  sharedState.count = countMap(scanIndex.animationCandidates) + countMap(scanIndex.soundCandidates)
-  sharedState.done = true
-  scanIndex.ready = not (shouldCancel and shouldCancel())
-  scanIndex.building = false
-  startScanIndexWatchers()
-  task.spawn(persistScriptSourceCache)
-end
-
-local function copyScanIndexCandidates()
-  local animCandidates = {}
-  local soundCandidates = {}
-
-  for id in pairs(scanIndex.animationCandidates) do animCandidates[id] = true end
-  for id in pairs(scanIndex.soundCandidates) do soundCandidates[id] = true end
-
-  return animCandidates, soundCandidates
-end
-
 local function refreshIndexedObjectAfterChange(obj)
-  if scanIndex.ready and obj and obj.Parent then
-    indexObject(obj)
-  else
-    lastScanResults = nil
-  end
+  -- Scans are intentionally rebuilt from the live DataModel every time.
 end
 
 -- Candidate resolution
@@ -1216,7 +760,7 @@ local function resolveAssetCandidates(candidates, expectedAssetTypeId, options, 
       while true do
         local _, assetId = claimNextAssetId()
         if not assetId then break end
-        local info = getProductInfoCached(assetId)
+        local info = getProductInfoFresh(assetId)
         processed += 1
         sharedState.processed = processed
         if info and info.AssetTypeId == expectedAssetTypeId then
@@ -1234,7 +778,6 @@ local function resolveAssetCandidates(candidates, expectedAssetTypeId, options, 
   end
 
   while activeWorkers > 0 do task.wait() end
-  task.spawn(persistCache)
 
   local results = {}
   for _, assetId in ipairs(candidateList) do
@@ -1247,16 +790,77 @@ end
 
 -- Public scan APIs
 
-local function getOrRunScan(onProgress, shouldCancel)
-  if not scanIndex.ready then
-    buildScanIndex(onProgress, shouldCancel)
-  elseif onProgress then
-    local total = countMap(scanIndex.animationCandidates) + countMap(scanIndex.soundCandidates)
-    onProgress("scan", total, total, total)
+local function addFreshScanId(candidates, obj, kind, assetId)
+  assetId = tostring(assetId or ""):match("^(%d+)$")
+  if not assetId then return end
+
+  candidates[kind][assetId] = true
+  scanHitLists[kind][obj] = true
+end
+
+local function runFreshScan(onProgress, shouldCancel)
+  table.clear(scanHitLists.animation)
+  table.clear(scanHitLists.sound)
+  lastScanCandidateCounts.animation = 0
+  lastScanCandidateCounts.sound = 0
+
+  local candidates = { animation = {}, sound = {} }
+  local descendants = game:GetDescendants()
+  local total = #descendants
+
+  resetSharedState("scan", total)
+  spawnHeartbeatReporter(sharedState, onProgress)
+
+  if total == 0 then
+    sharedState.done = true
+    return candidates.animation, candidates.sound
   end
 
+  local nextIndex = 0
+  local processed = 0
+  local doneWorkers = 0
+  local workerCount = math.min(SOURCE_READ_WORKERS, total)
+
+  local function claimNextObject()
+    if shouldCancel and shouldCancel() then return nil end
+    nextIndex += 1
+    return descendants[nextIndex]
+  end
+
+  for _ = 1, workerCount do
+    task.spawn(function()
+      while true do
+        local obj = claimNextObject()
+        if not obj then break end
+
+        local idsByKind = collectIdsFromObject(obj)
+        for id in pairs(idsByKind.animation) do addFreshScanId(candidates, obj, "animation", id) end
+        for id in pairs(idsByKind.sound) do addFreshScanId(candidates, obj, "sound", id) end
+
+        processed += 1
+        sharedState.processed = processed
+        if processed % 50 == 0 then
+          sharedState.count = countMap(candidates.animation) + countMap(candidates.sound)
+        end
+        if processed % SCRIPT_YIELD_BATCH == 0 then task.wait() end
+      end
+      doneWorkers += 1
+    end)
+  end
+
+  while doneWorkers < workerCount do task.wait() end
+
+  lastScanCandidateCounts.animation = countMap(candidates.animation)
+  lastScanCandidateCounts.sound = countMap(candidates.sound)
+  sharedState.count = lastScanCandidateCounts.animation + lastScanCandidateCounts.sound
+  sharedState.done = true
+
+  return candidates.animation, candidates.sound
+end
+
+local function getOrRunScan(onProgress, shouldCancel)
   if shouldCancel and shouldCancel() then return {}, {} end
-  return copyScanIndexCandidates()
+  return runFreshScan(onProgress, shouldCancel)
 end
 
 local function getAnimationIds(onProgress, shouldCancel)
@@ -1605,7 +1209,6 @@ local function replaceIds(inputString, onProgress, shouldCancel)
               end)
 
               if success then
-                scriptSourceCache[obj] = nil
                 refreshIndexedObjectAfterChange(obj)
                 changedCount += count
                 scriptOccurrencesChanged += count
@@ -1680,8 +1283,6 @@ local function replaceIds(inputString, onProgress, shouldCancel)
   else
     print("[ISpooferMotion] Success: no pasted old IDs were found after replacement.")
   end
-
-  task.spawn(persistScriptSourceCache)
 
   return {
     changed    = changedCount,
@@ -1758,7 +1359,16 @@ local function setupGetIdsUI(ui)
       if not shouldCancel() then
         if success then
           writeOutputScript(doneNoun, "TYPE: " .. string.upper(label:sub(1, -2)) .. "\n" .. table.concat(resultsOrError, "\n"))
-          prompt.Text = "Found " .. tostring(#resultsOrError) .. " " .. label .. "."
+          local candidateCount = lastScanCandidateCounts[label:sub(1, -2)] or #resultsOrError
+          if candidateCount == 0 then
+            prompt.Text = "No " .. label .. " found in this place."
+            warn("[ISpooferMotion] No " .. label .. " candidates were found. Check that the place contains Animation/Sound objects, asset URLs, or script values with IDs.")
+          elseif #resultsOrError == 0 then
+            prompt.Text = "Found " .. tostring(candidateCount) .. " possible " .. label .. ", but none matched Roblox metadata."
+            warn("[ISpooferMotion] Found " .. tostring(candidateCount) .. " possible " .. label .. " IDs, but GetProductInfo did not confirm them as " .. doneNoun .. ". Try again after a moment, or check whether the assets are private/deleted.")
+          else
+            prompt.Text = "Found " .. tostring(#resultsOrError) .. " " .. label .. "."
+          end
         else
           warn(doneNoun .. " scan failed: " .. tostring(resultsOrError))
           prompt.Text = "Choose an option..."
