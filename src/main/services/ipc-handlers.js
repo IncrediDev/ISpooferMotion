@@ -3,6 +3,7 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
+const { spawn } = require('node:child_process');
 const { app, dialog, ipcMain, shell } = require('electron');
 const {
   DEVELOPER_MODE,
@@ -14,11 +15,13 @@ const {
 const {
   getPlaceIdFromCreator,
   getMultiplePlaceIds,
+  getPlaceSuggestionsFromCreator,
 } = require('./assets');
 const {
-  getCookieFromRobloxStudio,
+  getCookieFromAutoDetect,
   getAuthenticatedUserId,
   getCsrfToken,
+  readResponseText,
 } = require('./auth');
 const {
   downloadAnimationAssetWithProgress,
@@ -71,6 +74,43 @@ function handleIpc(channel, handler) {
   ipcMain.handle(channel, handler);
 }
 
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths.filter(Boolean).map((entry) => path.normalize(entry)))];
+}
+
+function spawnDetached(filePath, args = []) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = spawn(filePath, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve(true);
+    });
+  });
+}
+
 function getReleaseSourceLabel() {
   const owner = 'IncrediDev';
   const repo = 'ISpooferMotion';
@@ -98,7 +138,19 @@ async function readJsonFile(filePath, fallback) {
 
 async function writeJsonFile(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8');
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(value, null, 2), 'utf8');
+  try {
+    await fs.rename(tmpPath, filePath);
+  } catch (err) {
+    if (!['EACCES', 'EPERM', 'EEXIST'].includes(err?.code)) {
+      await fs.rm(tmpPath, { force: true }).catch(() => {});
+      throw err;
+    }
+
+    await fs.copyFile(tmpPath, filePath);
+    await fs.rm(tmpPath, { force: true }).catch(() => {});
+  }
 }
 
 function getRendererSettingsPath() {
@@ -136,7 +188,32 @@ function migrateProfileSecrets(allSecrets) {
 
 async function loadProfileSecrets() {
   const allSecrets = await readJsonFile(getProfileSecretsPath(), {});
-  return migrateProfileSecrets(allSecrets);
+  const migrated = migrateProfileSecrets(allSecrets);
+  if (!migrated.profiles || typeof migrated.profiles !== 'object') migrated.profiles = {};
+  if (Object.keys(migrated.profiles).length === 0) {
+    migrated.profiles.default = { name: 'Default Profile', cookie: '', apiKey: '', groupId: '' };
+  }
+  if (!migrated.activeProfileId || !migrated.profiles[migrated.activeProfileId]) {
+    migrated.activeProfileId = Object.keys(migrated.profiles)[0];
+  }
+  return migrated;
+}
+
+function normalizeProfileSecrets(secrets) {
+  const profile = normalizePayload(secrets);
+  const normalized = {
+    name: String(profile.name || 'Unnamed Profile'),
+    cookie: typeof profile.cookie === 'string' ? profile.cookie : '',
+    apiKey: typeof profile.apiKey === 'string' ? profile.apiKey.trim() : '',
+    groupId: typeof profile.groupId === 'string' ? profile.groupId.replace(/\D/g, '') : '',
+  };
+
+  for (const [key, value] of Object.entries(profile)) {
+    if (key === 'profileId') continue;
+    if (normalized[key] === undefined) normalized[key] = value;
+  }
+
+  return normalized;
 }
 
 async function saveProfileSecrets(data) {
@@ -144,13 +221,23 @@ async function saveProfileSecrets(data) {
   const allSecrets = await loadProfileSecrets();
 
   if (payload.action === 'setActive') {
-    allSecrets.activeProfileId = payload.profileId;
+    const requestedId = String(payload.profileId || '');
+    if (!allSecrets.profiles[requestedId]) {
+      throw new Error(`Profile "${requestedId}" does not exist.`);
+    }
+    allSecrets.activeProfileId = requestedId;
   } else if (payload.action === 'saveProfile') {
-    const pId = payload.profileId || `profile_${Date.now()}`;
-    allSecrets.profiles[pId] = {
-      ...(allSecrets.profiles[pId] || {}),
-      ...payload.secrets,
-    };
+    const pId = String(payload.profileId || `profile_${Date.now()}`);
+    allSecrets.profiles[pId] = normalizeProfileSecrets(payload.secrets);
+    if (!allSecrets.activeProfileId) allSecrets.activeProfileId = pId;
+  } else if (payload.action === 'patchProfile') {
+    const pId = String(payload.profileId || allSecrets.activeProfileId || 'default');
+    const existing = allSecrets.profiles[pId] || { name: 'Unnamed Profile', cookie: '', apiKey: '', groupId: '' };
+    allSecrets.profiles[pId] = normalizeProfileSecrets({
+      ...existing,
+      ...normalizePayload(payload.secrets),
+    });
+    if (!allSecrets.activeProfileId) allSecrets.activeProfileId = pId;
   } else if (payload.action === 'deleteProfile') {
     delete allSecrets.profiles[payload.profileId];
     if (allSecrets.activeProfileId === payload.profileId) {
@@ -160,11 +247,10 @@ async function saveProfileSecrets(data) {
   } else if (payload.profileId) {
     // Backwards compatibility
     const pId = String(payload.profileId || 'default');
-    allSecrets.profiles[pId] = {
+    allSecrets.profiles[pId] = normalizeProfileSecrets({
       ...(allSecrets.profiles[pId] || {}),
       ...normalizePayload(payload.secrets || payload),
-    };
-    delete allSecrets.profiles[pId].profileId;
+    });
   }
 
   await writeJsonFile(getProfileSecretsPath(), allSecrets);
@@ -217,8 +303,7 @@ async function getRobloxProfile(context) {
   if (!context) return null;
   let cookie = context.cookie;
   if (!cookie && context.autoDetect) {
-    const { getCookieFromRobloxStudio } = require('./auth');
-    cookie = await getCookieFromRobloxStudio();
+    cookie = await getCookieFromAutoDetect();
   }
   if (!cookie) return null;
   cookie = cookie.replace('.ROBLOSECURITY=', '').trim();
@@ -262,6 +347,111 @@ async function getRobloxProfile(context) {
   }
 }
 
+function parseCreatorLookupInput(input, explicitType) {
+  const raw = String(input || '').trim();
+  const compact = raw.replace(/[,\s]+/g, ' ');
+  const id = compact.match(/\d+/)?.[0] || '';
+  const lower = compact.toLowerCase();
+  const requestedType = String(explicitType || '').toLowerCase();
+  let creatorType = requestedType === 'group' || requestedType === 'user' ? requestedType : '';
+
+  if (!creatorType) {
+    if (lower.includes('group') || lower.startsWith('g:')) creatorType = 'group';
+    else if (lower.includes('user') || lower.startsWith('u:')) creatorType = 'user';
+  }
+
+  if (!id) {
+    throw new Error('Enter a numeric User ID or Group ID.');
+  }
+  if (!creatorType) {
+    throw new Error('Choose whether the ID belongs to a user or a group.');
+  }
+
+  return { creatorType, creatorId: id };
+}
+
+async function validateOpenCloudApiKey(apiKey) {
+  const key = String(apiKey || '').trim();
+  if (!key) {
+    return { ok: false, code: 'missing', message: 'Open Cloud API key is required.' };
+  }
+  if (/\s/.test(key) || key.length < 20) {
+    return {
+      ok: false,
+      code: 'format',
+      message: 'API key format looks invalid. Paste the full key from Creator Dashboard without spaces or line breaks.',
+    };
+  }
+
+  try {
+    const response = await fetch('https://apis.roblox.com/assets/v1/assets/0', {
+      headers: { 'x-api-key': key },
+    });
+    const body = await readResponseText(response, 300);
+
+    if (response.status === 401) {
+      return {
+        ok: false,
+        code: 'invalid',
+        message: 'API key was rejected by Roblox. It may be invalid, expired, revoked, moderated, or copied incorrectly.',
+      };
+    }
+    if (response.status === 403) {
+      return {
+        ok: false,
+        code: 'permission',
+        message: 'API key was accepted but lacks Assets API access. Add asset:read and asset:write permissions, then save the key again.',
+      };
+    }
+    if (response.status === 404 || response.status === 400 || response.ok) {
+      return {
+        ok: true,
+        code: 'validated',
+        message: 'API key was accepted for the Assets API. Upload write permission will also be checked during upload.',
+      };
+    }
+
+    return {
+      ok: true,
+      code: 'unchecked',
+      message: `Could not fully validate API key right now (Roblox returned ${response.status}${body ? `: ${body}` : ''}). The key was saved and upload will report any permission errors.`,
+    };
+  } catch (err) {
+    return {
+      ok: true,
+      code: 'network',
+      message: `Could not reach Roblox to validate the API key: ${err.message}. The key was saved and will be checked during upload.`,
+    };
+  }
+}
+
+function normalizeSpooferInputLine(line) {
+  return String(line || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u200B-\u200D\u2060]/g, '')
+    .replace(/\u00A0/g, ' ')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim();
+}
+
+function isSpooferOutputMetadataLine(line) {
+  const trimmed = normalizeSpooferInputLine(line);
+  if (!trimmed) return true;
+  if (/^--/.test(trimmed)) return true;
+  if (/^COPY THE CONTENTS OF THIS SCRIPT/i.test(trimmed)) return true;
+  if (/^Generated by ISpooferMotion/i.test(trimmed)) return true;
+
+  const withoutKnownMarkers = trimmed
+    .replace(/--\[\[/g, '')
+    .replace(/--\]\]/g, '')
+    .replace(/\bTYPE\s*:\s*(SOUND|ANIMATION)\b/gi, '')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/[\s,\u00A0]+/g, '')
+    .replace(/[-_[\]{}()*=;:|/\\]+/g, '');
+
+  return withoutKnownMarkers === '';
+}
+
 /**
  * Registers all IPC handlers for main process
  */
@@ -296,6 +486,65 @@ function registerIpcHandlers(
   handleIpc('save-profile-secrets', (_event, data) => saveProfileSecrets(data));
   handleIpc('clear-profile-secrets', (_event, profileId) => clearProfileSecrets(profileId));
   handleIpc('get-roblox-profile', (_event, context) => getRobloxProfile(context));
+  handleIpc('validate-opencloud-api-key', async (_event, apiKey) => validateOpenCloudApiKey(apiKey));
+  handleIpc('search-place-ids', async (_event, payload) => {
+    const context = normalizePayload(payload);
+    const { creatorType, creatorId } = parseCreatorLookupInput(
+      context.creatorId || context.input,
+      context.creatorType,
+    );
+    const maxPlaceIds = Number.parseInt(context.maxPlaceIds, 10) || 10;
+    let cookie = context.cookie;
+    if (context.autoDetect && !cookie) {
+      cookie = await getCookieFromAutoDetect(creatorType === 'user' ? creatorId : null);
+    }
+
+    const primary = await getPlaceSuggestionsFromCreator(creatorType, creatorId, cookie, maxPlaceIds);
+    const warnings = [...(primary.errors || [])];
+    let places = primary.places || [];
+    let resolvedCreatorType = creatorType;
+
+    if (places.length === 0 && context.tryAlternateType !== false) {
+      const alternateType = creatorType === 'group' ? 'user' : 'group';
+      const alternate = await getPlaceSuggestionsFromCreator(
+        alternateType,
+        creatorId,
+        cookie,
+        maxPlaceIds,
+      );
+      warnings.push(...(alternate.errors || []).map((message) => `${alternateType} fallback ${message}`));
+      if (alternate.places?.length) {
+        places = alternate.places;
+        resolvedCreatorType = alternateType;
+        warnings.push(
+          `No ${creatorType}-owned places were found, but ${alternate.places.length} ${alternateType}-owned place(s) matched the same ID.`,
+        );
+      }
+    }
+
+    let message = '';
+    if (places.length === 0) {
+      const ownerLabel = creatorType === 'group' ? 'Group ID' : 'User ID';
+      message = `No places found for that ${ownerLabel}. Check the ID, try the other owner type, or use Override place ID if the experience is private.`;
+      if (!cookie) {
+        message += ' Add a Roblox cookie or enable Auto detect cookie to include places visible only to your account.';
+      }
+    } else if (resolvedCreatorType !== creatorType) {
+      message = `Found ${places.length} place(s), but under ${resolvedCreatorType} ownership instead of ${creatorType}.`;
+    } else {
+      message = `Found ${places.length} place${places.length === 1 ? '' : 's'}.`;
+    }
+
+    return {
+      creatorType: resolvedCreatorType,
+      requestedCreatorType: creatorType,
+      creatorId,
+      places,
+      warnings,
+      message,
+      usedCookie: Boolean(cookie),
+    };
+  });
   handleIpc('clear-asset-history', async () => true);
   handleIpc('copy-debug-info', async (_event, context) => {
     const info = JSON.stringify(
@@ -340,24 +589,39 @@ function registerIpcHandlers(
   handleIpc('uninstall-app', async () => {
     try {
       if (process.platform === 'win32') {
-        const uninstallerPath = path.join(process.resourcesPath, '..', 'Uninstall ISpooferMotion.exe');
-        try {
-          const { spawn } = require('child_process');
-          spawn(uninstallerPath, [], { detached: true, stdio: 'ignore' }).unref();
-          app.quit();
-          return true;
-        } catch (err) {
-          // fallback to just wiping app data
+        const uninstallerPaths = uniquePaths([
+          path.join(path.dirname(process.execPath), 'Uninstall ISpooferMotion.exe'),
+          path.join(process.resourcesPath, '..', 'Uninstall ISpooferMotion.exe'),
+        ]);
+
+        for (const uninstallerPath of uninstallerPaths) {
+          if (!(await pathExists(uninstallerPath))) continue;
+          try {
+            await spawnDetached(uninstallerPath);
+            app.quit();
+            return { ok: true, message: 'Uninstaller started.' };
+          } catch (err) {
+            return {
+              ok: false,
+              message: `Could not start the Windows uninstaller: ${err.message}`,
+            };
+          }
         }
+
+        return {
+          ok: false,
+          message:
+            'The Windows uninstaller was not found. This usually means the app is running from an unpacked build or the install folder is incomplete.',
+        };
       }
 
       const userDataPath = app.getPath('userData');
       await fs.rm(userDataPath, { recursive: true, force: true });
       app.quit();
-      return true;
+      return { ok: true, message: 'App data removed.' };
     } catch (e) {
       if (DEVELOPER_MODE) console.warn('Failed to uninstall app', e);
-      return false;
+      return { ok: false, message: e.message || 'Failed to uninstall app.' };
     }
   });
 
@@ -552,7 +816,7 @@ function registerIpcHandlers(
       let cookie = data.cookie;
       if (data.autoDetect && !cookie) {
         if (DEVELOPER_MODE) console.log('(Dev) Auto-detecting cookie...');
-        cookie = await getCookieFromRobloxStudio();
+        cookie = await getCookieFromAutoDetect();
         if (DEVELOPER_MODE)
           console.log('(Dev) Auto-detected cookie:', cookie ? 'Found' : 'Not found');
       }
@@ -677,10 +941,14 @@ async function handleSpooferAction(
     console.log('(Dev) Skipping auto-clear: using user-selected download folder', downloadsDir);
   }
 
+  data.apiKey = String(data.apiKey || '').trim();
+  data.groupId = data.groupId ? String(data.groupId).replace(/\D/g, '') : '';
+  data.overridePlaceId = data.overridePlaceId ? String(data.overridePlaceId).replace(/\D/g, '') : '';
+
   // Validate group ID is numeric if provided
   if (data.groupId && !/^\d+$/.test(String(data.groupId).trim())) {
     sendSpooferResultToRenderer({
-      output: `Invalid Group ID "${data.groupId}" — must be a number only, not a URL or text.`,
+      output: `Invalid Group ID "${data.groupId}" - must be a number only, not a URL or text.`,
       success: false,
     });
     return;
@@ -690,45 +958,87 @@ async function handleSpooferAction(
   if (!data.downloadOnly && !data.apiKey) {
     sendSpooferResultToRenderer({
       output:
-        'Uploads now require an Open Cloud API key.\n\nTo fix this:\n1. Go to create.roblox.com → Open Cloud → API Keys\n2. Create a key with Assets Read & Write permissions\n3. Paste the key into the "Open Cloud API Key" field',
+        'Uploads now require an Open Cloud API key.\n\nTo fix this:\n1. Go to create.roblox.com -> Open Cloud -> API Keys\n2. Create a key with Assets Read & Write permissions\n3. Paste the key into the "Open Cloud API Key" field',
       success: false,
     });
     return;
   }
 
+  if (!data.downloadOnly) {
+    const apiKeyValidation = await validateOpenCloudApiKey(data.apiKey);
+    if (!apiKeyValidation.ok) {
+      sendSpooferResultToRenderer({
+        output: apiKeyValidation.message,
+        success: false,
+      });
+      sendStatusMessage('API key validation failed');
+      return;
+    }
+    console.log(`[API KEY] ${apiKeyValidation.message}`);
+  }
+
   // Parse animations or sounds
   const isSoundMode = data.spoofSounds === true;
   const assetTypeName = isSoundMode ? 'Audio' : 'Animation';
+  const invalidAssetLines = [];
+  const duplicateAssetLines = [];
+  const seenAssetIds = new Set();
   const assetEntries = (data.animationId || '')
     .split('\n')
-    .map((line) => {
-      const trimmedLine = line.trim();
-      if (!trimmedLine) return null;
+    .map((line, index) => {
+      const trimmedLine = normalizeSpooferInputLine(line);
+      if (isSpooferOutputMetadataLine(trimmedLine)) return null;
       const match = trimmedLine.match(/^\[([^\]]+)\]\s*\[([^\]]+)\]\s*\[([^\]]+)\],?$/);
-      if (!match) return null;
+      if (!match) {
+        invalidAssetLines.push({ line: index + 1, reason: 'Expected [assetId] [name] [User123] or [Group123].' });
+        return null;
+      }
       const id = match[1].trim();
       const name = match[2].trim();
       const third = match[3].trim();
       let creatorType, creatorId;
-      if (third.startsWith('User')) {
+      if (!/^\d+$/.test(id)) {
+        invalidAssetLines.push({ line: index + 1, reason: 'Asset ID must be numeric.' });
+        return null;
+      }
+      if (seenAssetIds.has(id)) {
+        duplicateAssetLines.push({ line: index + 1, id });
+        return null;
+      }
+      if (/^user/i.test(third)) {
         creatorType = 'user';
         creatorId = third.substring(4).replace(/[^0-9]/g, ''); // Extract only numbers
-      } else if (third.startsWith('Group')) {
+      } else if (/^group/i.test(third)) {
         creatorType = 'group';
         creatorId = third.substring(5).replace(/[^0-9]/g, ''); // Extract only numbers
       } else {
+        invalidAssetLines.push({ line: index + 1, reason: 'Creator must start with User or Group.' });
         return null;
       }
+      if (!creatorId) {
+        invalidAssetLines.push({ line: index + 1, reason: 'Creator ID must be numeric.' });
+        return null;
+      }
+      seenAssetIds.add(id);
       return { id, name, creatorType, creatorId };
     })
     .filter((entry) => entry && entry.id && entry.creatorId);
 
   if (assetEntries.length === 0) {
+    const details = invalidAssetLines.length
+      ? `\n\nInvalid line(s):\n${invalidAssetLines.map((item) => `Line ${item.line}: ${item.reason}`).join('\n')}`
+      : '';
     sendSpooferResultToRenderer({
-      output: `No valid ${isSoundMode ? 'sound' : 'animation'} entries.`,
+      output: `No valid ${isSoundMode ? 'sound' : 'animation'} entries were found. Paste entries like:\n[12345678] [ExampleAsset] [User12345]\n[23456789] [ExampleGroupAsset] [Group67890]${details}`,
       success: false,
     });
     return;
+  }
+
+  if (invalidAssetLines.length || duplicateAssetLines.length) {
+    console.warn(
+      `[INPUT] Processing ${assetEntries.length} valid ${isSoundMode ? 'sound' : 'animation'} entr${assetEntries.length === 1 ? 'y' : 'ies'}; skipped ${invalidAssetLines.length} invalid and ${duplicateAssetLines.length} duplicate line(s).`,
+    );
   }
 
   // For backwards compatibility with code that expects animationEntries
@@ -740,9 +1050,9 @@ async function handleSpooferAction(
   if (data.autoDetectCookie) {
     try {
       if (firstEntry.creatorType === 'user') {
-        robloxCookie = await getCookieFromRobloxStudio(firstEntry.creatorId);
+        robloxCookie = await getCookieFromAutoDetect(firstEntry.creatorId);
       } else {
-        robloxCookie = await getCookieFromRobloxStudio();
+        robloxCookie = await getCookieFromAutoDetect();
       }
       if (!robloxCookie) throw new Error('Auto-detected cookie empty/not found.');
     } catch (err) {
@@ -798,7 +1108,7 @@ async function handleSpooferAction(
     );
 
     if (animationEntries.length === 0) {
-      // All assets were already completed — just show the saved mappings and finish
+      // All assets were already completed - just show the saved mappings and finish
       const mappingOutput = (session.completedMappings || [])
         .map((m) => `${m.originalId} = ${m.newId},`)
         .join('\n');
@@ -809,7 +1119,7 @@ async function handleSpooferAction(
     }
 
     sendSpooferResultToRenderer({
-      output: `Resuming — ${animationEntries.length} asset(s) remaining from previous session.\n`,
+      output: `Resuming - ${animationEntries.length} asset(s) remaining from previous session.\n`,
       success: true,
     });
   } else {
@@ -1281,7 +1591,7 @@ async function handleSpooferAction(
     if (DEVELOPER_MODE) console.log('(Dev) Download-only mode enabled, skipping all uploads');
   } else {
     const successfulDownloads = downloadResults.filter((r) => r.success);
-    
+
     if (data.replaceExisting) {
       sendStatusMessage('Looking for replacements...');
       if (successfulDownloads.length > 0) {
@@ -1461,7 +1771,7 @@ async function handleSpooferAction(
       }
     } else {
       console.error(`[DOWNLOAD FAILED] ${entry.name} (ID: ${entry.id}): ${downloadResult.error}`);
-      verboseOutputMessage += `Download Failed: ${entry.name} (ID: ${entry.id}) — ${downloadResult.error}\n`;
+      verboseOutputMessage += `Download Failed: ${entry.name} (ID: ${entry.id}) - ${downloadResult.error}\n`;
     }
   }
 
@@ -1508,9 +1818,9 @@ async function handleSpooferAction(
     const maxItems = 5;
     const lines = items
       .slice(0, maxItems)
-      .map((it) => `- ${it.name} (ID: ${it.id}) — ${it.reason}`);
+      .map((it) => `- ${it.name} (ID: ${it.id}) - ${it.reason}`);
     const remaining = items.length - maxItems;
-    return `${label}:\n${lines.join('\n')}${remaining > 0 ? `\n(+${remaining} more…)` : ''}\n`;
+    return `${label}:\n${lines.join('\n')}${remaining > 0 ? `\n(+${remaining} more)` : ''}\n`;
   };
 
   let runSummary =
@@ -1521,6 +1831,18 @@ async function handleSpooferAction(
     (!data.downloadOnly
       ? `Uploaded: ${successfulUploadCount}/${downloadResults.filter((r) => r.success).length}${uploadFailures.length ? ` (Failed: ${uploadFailures.length}, Skipped: ${skippedUploadsCount})` : skippedUploadsCount ? ` (Skipped: ${skippedUploadsCount})` : ''}\n`
       : '');
+
+  if (invalidAssetLines.length || duplicateAssetLines.length) {
+    const parseNotes = [];
+    invalidAssetLines.slice(0, 5).forEach((item) => {
+      parseNotes.push(`- Line ${item.line}: ${item.reason}`);
+    });
+    duplicateAssetLines.slice(0, 5).forEach((item) => {
+      parseNotes.push(`- Line ${item.line}: duplicate asset ID ${item.id}`);
+    });
+    const skippedCount = invalidAssetLines.length + duplicateAssetLines.length;
+    runSummary += `\nInput lines skipped: ${skippedCount}\n${parseNotes.join('\n')}${skippedCount > parseNotes.length ? `\n(+${skippedCount - parseNotes.length} more)` : ''}\n`;
+  }
 
   // Add top failure details (bounded) for quick inspection
   if (downloadFailures.length) {
@@ -1533,7 +1855,7 @@ async function handleSpooferAction(
   // Add rate-limit guidance if detected
   if (rateLimitFailures.length > 0) {
     const suggestedDelay = Math.min(Math.max(UPLOAD_RETRY_DELAY_MS * 2, 10000), 60000);
-    runSummary += `\n⚠️ RATE LIMIT DETECTED (429): ${rateLimitFailures.length} upload(s) hit rate limits.\n`;
+    runSummary += `\nRATE LIMIT DETECTED (429): ${rateLimitFailures.length} upload(s) hit rate limits.\n`;
     runSummary += `   Recommendation: Try again with higher "Retry Delay" (current: ${UPLOAD_RETRY_DELAY_MS}ms, suggested: ${suggestedDelay}ms)\n`;
     runSummary += `   Or increase "Upload Retries" for more attempts.\n`;
   }
@@ -1554,15 +1876,18 @@ async function handleSpooferAction(
     }
   } else if (uploadMappingOutput.trim()) {
     finalOutput = uploadMappingOutput.trim().replace(/,$/, '');
+    if (downloadFailures.length || uploadFailures.length || invalidAssetLines.length || duplicateAssetLines.length) {
+      finalOutput += `\n${runSummary}`;
+    }
   } else {
     if (downloadedSuccessfullyCount > 0 && csrfToken && successfulUploadCount === 0) {
-      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}), but no ${isSoundMode ? 'sounds' : 'animations'} were successfully uploaded.`;
+      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}), but no ${isSoundMode ? 'sounds' : 'animations'} were successfully uploaded.\n${runSummary}`;
     } else if (downloadedSuccessfullyCount > 0 && !csrfToken) {
-      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}). Uploads skipped (CSRF token missing).`;
+      finalOutput = `Downloads successful (${downloadedSuccessfullyCount}/${animationEntries.length}). Uploads skipped (CSRF token missing).\n${runSummary}`;
     } else if (animationEntries.length > 0) {
       finalOutput = hasAuthError
         ? 'Authentication failed. Please check your Roblox cookie.'
-        : `No ${isSoundMode ? 'sounds' : 'animations'} were successfully processed to provide mappings.`;
+        : `No ${isSoundMode ? 'sounds' : 'animations'} were successfully processed to provide mappings. Valid entries were parsed, but every download or upload failed.\n${runSummary}`;
     } else {
       finalOutput = 'No operations performed.';
     }
@@ -1603,7 +1928,7 @@ async function handleSpooferAction(
     job: jobRecord,
   });
 
-  // Clear session on completion (all done or all failed — no point resuming)
+  // Clear session on completion (all done or all failed - no point resuming)
   await clearSession();
 
   // Clear downloads directory after operation completes (only if using temp directory, not user-selected folder)

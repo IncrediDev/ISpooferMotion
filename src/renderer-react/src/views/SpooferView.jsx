@@ -16,11 +16,19 @@ export default function SpooferView({ isActive }) {
   const [maxPlaceIds, setMaxPlaceIds] = useState(10);
   const [maxPlaceIdRetries, setMaxPlaceIdRetries] = useState(3);
   const [overridePlaceId, setOverridePlaceId] = useState('');
+  const [placeSearchInput, setPlaceSearchInput] = useState('');
+  const [placeCreatorType, setPlaceCreatorType] = useState('user');
+  const [placeLookupOpen, setPlaceLookupOpen] = useState(false);
+  const [placeTypeOpen, setPlaceTypeOpen] = useState(false);
+  const [placeSearchLoading, setPlaceSearchLoading] = useState(false);
+  const [placeSearchMessage, setPlaceSearchMessage] = useState('');
+  const [placeSuggestions, setPlaceSuggestions] = useState([]);
   const [uploadRetries, setUploadRetries] = useState(3);
   const [uploadRetryDelay, setUploadRetryDelay] = useState(5000);
 
   const [outputData, setOutputData] = useState('');
   const [statusText, setStatusText] = useState('No run yet');
+  const [apiKeyStatus, setApiKeyStatus] = useState('');
   const [inlineQuotaText, setInlineQuotaText] = useState('Checking quota...');
   const [inlineQuotaError, setInlineQuotaError] = useState(false);
 
@@ -108,6 +116,9 @@ export default function SpooferView({ isActive }) {
         setAutoDetectCookie(profile.autoDetectCookie ?? true);
         setDownloadOnly(profile.downloadOnly ?? false);
         setSpoofSounds(profile.spoofSounds ?? false);
+        setOverridePlaceId(profile.overridePlaceId ?? '');
+        setPlaceSearchInput(profile.placeSearchInput ?? profile.groupId ?? '');
+        setPlaceCreatorType(profile.placeCreatorType ?? (profile.groupId ? 'group' : 'user'));
       }
     };
     window.addEventListener('profile-changed', handleProfileChanged);
@@ -185,6 +196,20 @@ export default function SpooferView({ isActive }) {
       return;
     }
 
+    const normalizedApiKey = openCloudApiKey.trim();
+    if (!downloadOnly) {
+      setStatusText('Checking API key...');
+      const apiKeyValidation = await window.electronAPI?.validateOpenCloudApiKey?.(normalizedApiKey);
+      if (!apiKeyValidation?.ok) {
+        setApiKeyStatus(apiKeyValidation?.message || 'API key is invalid.');
+        setStatusText('API key validation failed.');
+        return;
+      }
+      setOpenCloudApiKey(normalizedApiKey);
+      setApiKeyStatus(apiKeyValidation.message || 'API key saved.');
+      await updateProfileValue('apiKey', normalizedApiKey);
+    }
+
     setRunning(true);
     setPaused(false);
     setStatusText('Starting...');
@@ -201,7 +226,7 @@ export default function SpooferView({ isActive }) {
     const payload = {
       animationId,
       robloxCookie,
-      apiKey: openCloudApiKey,
+      apiKey: normalizedApiKey,
       groupId,
       spoofSounds,
       enableSpoofing: !downloadOnly,
@@ -265,25 +290,124 @@ export default function SpooferView({ isActive }) {
       const secrets = await window.electronAPI?.loadProfileSecrets?.();
       const activeId = secrets?.activeProfileId;
       if (!activeId) return;
-      const profile = secrets.profiles[activeId];
-      profile[key] = value;
       await window.electronAPI?.saveProfileSecrets?.({
-        action: 'saveProfile',
+        action: 'patchProfile',
         profileId: activeId,
-        secrets: profile,
+        secrets: { [key]: value },
       });
     } catch (err) {
       console.error(err);
     }
   };
 
+  const normalizePastedLine = (line) => String(line || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u200B-\u200D\u2060]/g, '')
+    .replace(/\u00A0/g, ' ')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim();
+
   const handleInputTextChange = (val) => {
     setAnimationId(val);
-    if (val.includes('TYPE: SOUND')) {
+    const markerText = val
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = normalizePastedLine(line);
+        const stripped = trimmed
+          .replace(/--\[\[/g, '')
+          .replace(/--\]\]/g, '')
+          .replace(/\bTYPE\s*:\s*(SOUND|ANIMATION)\b/gi, '')
+          .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+          .replace(/[\s,\u00A0]+/g, '')
+          .replace(/[-_[\]{}()*=;:|/\\]+/g, '');
+        return stripped === '';
+      })
+      .join('\n');
+    const hasSoundMarker = /\bTYPE\s*:\s*SOUND\b/i.test(markerText);
+    const hasAnimationMarker = /\bTYPE\s*:\s*ANIMATION\b/i.test(markerText);
+    if (hasSoundMarker && !hasAnimationMarker) {
       setSpoofSounds(true);
-    } else if (val.includes('TYPE: ANIMATION')) {
+    } else if (hasAnimationMarker && !hasSoundMarker) {
       setSpoofSounds(false);
     }
+  };
+
+  const handleApiKeyBlur = async () => {
+    const trimmed = openCloudApiKey.trim();
+    setOpenCloudApiKey(trimmed);
+    if (!trimmed) {
+      setApiKeyStatus('API key removed.');
+      await updateProfileValue('apiKey', '');
+      return;
+    }
+
+    setApiKeyStatus('Checking API key...');
+    try {
+      const result = await window.electronAPI?.validateOpenCloudApiKey?.(trimmed);
+      if (!result?.ok) {
+        setApiKeyStatus(result?.message || 'API key is invalid.');
+        return;
+      }
+      await updateProfileValue('apiKey', trimmed);
+      setApiKeyStatus(result.message || 'API key saved.');
+    } catch (err) {
+      setApiKeyStatus(`Could not validate API key: ${err.message}`);
+    }
+  };
+
+  const handlePlaceSearch = async () => {
+    const creatorId = placeSearchInput.replace(/\D/g, '');
+    setPlaceSuggestions([]);
+    if (!creatorId) {
+      setPlaceSearchMessage('Enter a numeric User ID or Group ID.');
+      return;
+    }
+
+    setPlaceSearchInput(creatorId);
+    setPlaceSearchLoading(true);
+    setPlaceSearchMessage('Searching places...');
+    try {
+      const result = await window.electronAPI?.searchPlaceIds?.({
+        input: creatorId,
+        creatorType: placeCreatorType,
+        cookie: robloxCookie,
+        autoDetect: autoDetectCookie,
+        maxPlaceIds,
+      });
+      const places = result?.places || [];
+      setPlaceSuggestions(places);
+      await updateProfileValue('placeSearchInput', creatorId);
+      const resolvedCreatorType = result?.creatorType === 'group' ? 'group' : 'user';
+      if (resolvedCreatorType !== placeCreatorType) {
+        setPlaceCreatorType(resolvedCreatorType);
+      }
+      await updateProfileValue('placeCreatorType', resolvedCreatorType);
+
+      if (places.length === 1) {
+        setOverridePlaceId(places[0].placeId);
+        await updateProfileValue('overridePlaceId', places[0].placeId);
+        setPlaceSearchMessage(
+          `${result?.message || 'Found 1 place.'} Selected ${places[0].placeId}.`,
+        );
+      } else if (places.length > 1) {
+        setPlaceSearchMessage(result?.message || `Found ${places.length} places. Choose one below.`);
+      } else {
+        setPlaceSearchMessage(
+          result?.message ||
+            'No places found. Check the ID, owner type, cookie, and creator permissions.',
+        );
+      }
+    } catch (err) {
+      setPlaceSearchMessage(err.message || 'Place search failed.');
+    } finally {
+      setPlaceSearchLoading(false);
+    }
+  };
+
+  const selectSuggestedPlace = async (place) => {
+    setOverridePlaceId(place.placeId);
+    setPlaceSearchMessage(`Selected ${place.name} (${place.placeId}).`);
+    await updateProfileValue('overridePlaceId', place.placeId);
   };
 
   return (
@@ -359,12 +483,13 @@ export default function SpooferView({ isActive }) {
                     name="openCloudApiKey"
                     placeholder=" "
                     autoComplete="off"
-                    value={openCloudApiKey}
-                    onChange={(e) => {
-                      setOpenCloudApiKey(e.target.value);
-                      updateProfileValue('apiKey', e.target.value);
-                    }}
-                  />
+                  value={openCloudApiKey}
+                  onChange={(e) => {
+                    setOpenCloudApiKey(e.target.value);
+                    setApiKeyStatus('Unsaved changes. Leave the field to validate and save.');
+                  }}
+                  onBlur={handleApiKeyBlur}
+                />
                   <span>Open Cloud API Key</span>
                   <button
                     className="ui-button get-api-key-btn"
@@ -382,6 +507,7 @@ export default function SpooferView({ isActive }) {
                     Get Key
                   </button>
                 </div>
+                {apiKeyStatus && <span className="field-status">{apiKeyStatus}</span>}
               </label>
               <label className="floating-label">
                 <input
@@ -394,8 +520,9 @@ export default function SpooferView({ isActive }) {
                   disabled={downloadOnly}
                   value={groupId}
                   onChange={(e) => {
-                    setGroupId(e.target.value);
-                    updateProfileValue('groupId', e.target.value);
+                    const next = e.target.value.replace(/\D/g, '');
+                    setGroupId(next);
+                    updateProfileValue('groupId', next);
                   }}
                 />
                 <span>Group ID (Blank for user)</span>
@@ -500,46 +627,6 @@ export default function SpooferView({ isActive }) {
                   <input
                     className="ui-input"
                     type="number"
-                    id="maxPlaceIds"
-                    name="maxPlaceIds"
-                    value={maxPlaceIds}
-                    min="10"
-                    max="50"
-                    placeholder=" "
-                    onChange={(e) => setMaxPlaceIds(Number(e.target.value))}
-                  />
-                  <span>Max places</span>
-                </label>
-                <label className="floating-label">
-                  <input
-                    className="ui-input"
-                    type="number"
-                    id="maxPlaceIdRetries"
-                    name="maxPlaceIdRetries"
-                    value={maxPlaceIdRetries}
-                    min="1"
-                    max="10"
-                    placeholder=" "
-                    onChange={(e) => setMaxPlaceIdRetries(Number(e.target.value))}
-                  />
-                  <span>Max retries</span>
-                </label>
-                <label className="floating-label">
-                  <input
-                    className="ui-input"
-                    type="text"
-                    id="overridePlaceId"
-                    name="overridePlaceId"
-                    placeholder=" "
-                    value={overridePlaceId}
-                    onChange={(e) => setOverridePlaceId(e.target.value)}
-                  />
-                  <span>Override place ID</span>
-                </label>
-                <label className="floating-label">
-                  <input
-                    className="ui-input"
-                    type="number"
                     id="uploadRetries"
                     name="uploadRetries"
                     value={uploadRetries}
@@ -564,6 +651,148 @@ export default function SpooferView({ isActive }) {
                   />
                   <span>Retry delay (ms)</span>
                 </label>
+                <div className={`advanced-dropdown ${placeLookupOpen ? 'is-open' : ''}`}>
+                  <button
+                    className="advanced-dropdown-trigger ui-button"
+                    type="button"
+                    aria-expanded={placeLookupOpen}
+                    onClick={() => setPlaceLookupOpen((open) => !open)}
+                  >
+                    <span>Place ID lookup</span>
+                    <strong>{overridePlaceId ? `Selected: ${overridePlaceId}` : 'Auto discover'}</strong>
+                    <svg className="profile-trigger-arrow" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M7.4 9.2 12 13.8l4.6-4.6L18 10.6l-6 6-6-6 1.4-1.4Z" />
+                    </svg>
+                  </button>
+                  <div className="advanced-dropdown-panel">
+                    <label className="floating-label">
+                      <input
+                        className="ui-input"
+                        type="text"
+                        id="overridePlaceId"
+                        name="overridePlaceId"
+                        placeholder=" "
+                        value={overridePlaceId}
+                        onChange={(e) => {
+                          const next = e.target.value.replace(/\D/g, '');
+                          setOverridePlaceId(next);
+                          updateProfileValue('overridePlaceId', next);
+                        }}
+                      />
+                      <span>Override place ID</span>
+                    </label>
+                    <div className="place-options-grid">
+                      <label className="floating-label">
+                        <input
+                          className="ui-input"
+                          type="number"
+                          id="maxPlaceIds"
+                          name="maxPlaceIds"
+                          value={maxPlaceIds}
+                          min="10"
+                          max="50"
+                          placeholder=" "
+                          onChange={(e) => setMaxPlaceIds(Number(e.target.value))}
+                        />
+                        <span>Max places</span>
+                      </label>
+                      <label className="floating-label">
+                        <input
+                          className="ui-input"
+                          type="number"
+                          id="maxPlaceIdRetries"
+                          name="maxPlaceIdRetries"
+                          value={maxPlaceIdRetries}
+                          min="1"
+                          max="10"
+                          placeholder=" "
+                          onChange={(e) => setMaxPlaceIdRetries(Number(e.target.value))}
+                        />
+                        <span>Max retries</span>
+                      </label>
+                    </div>
+                    <div className="place-search-block">
+                      <div className="place-search-row">
+                    <div className={`profile-picker place-type-picker ${placeTypeOpen ? 'open' : ''}`}>
+                      <button
+                        className="profile-trigger ui-button"
+                        type="button"
+                        aria-label="Place owner type"
+                        aria-expanded={placeTypeOpen}
+                        onClick={() => setPlaceTypeOpen((open) => !open)}
+                      >
+                        <span className="profile-trigger-label">
+                          {placeCreatorType === 'group' ? 'Group ID' : 'User ID'}
+                        </span>
+                        <svg className="profile-trigger-arrow" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M7.4 9.2 12 13.8l4.6-4.6L18 10.6l-6 6-6-6 1.4-1.4Z" />
+                        </svg>
+                      </button>
+                      {placeTypeOpen && (
+                        <div className="profile-menu ui-dropdown" role="listbox">
+                          {[
+                            ['user', 'User ID'],
+                            ['group', 'Group ID'],
+                          ].map(([value, label]) => (
+                            <button
+                              key={value}
+                              className={`profile-option ui-button ${placeCreatorType === value ? 'selected' : ''}`}
+                              type="button"
+                              role="option"
+                              aria-selected={placeCreatorType === value}
+                              onClick={() => {
+                                setPlaceCreatorType(value);
+                                setPlaceTypeOpen(false);
+                                updateProfileValue('placeCreatorType', value);
+                              }}
+                            >
+                              <span>{label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <label className="floating-label place-search-input">
+                      <input
+                        className="ui-input"
+                        type="text"
+                        inputMode="numeric"
+                        id="placeSearchInput"
+                        name="placeSearchInput"
+                        placeholder=" "
+                        value={placeSearchInput}
+                        onChange={(e) => setPlaceSearchInput(e.target.value.replace(/\D/g, ''))}
+                      />
+                      <span>{placeCreatorType === 'group' ? 'Group ID for place search' : 'User ID for place search'}</span>
+                    </label>
+                    <button
+                      className="ui-button place-search-button"
+                      type="button"
+                      disabled={placeSearchLoading}
+                      onClick={handlePlaceSearch}
+                    >
+                      {placeSearchLoading ? 'Searching...' : 'Find Places'}
+                    </button>
+                      </div>
+                      {placeSearchMessage && <div className="field-status">{placeSearchMessage}</div>}
+                      {placeSuggestions.length > 1 && (
+                        <div className="place-suggestion-list">
+                          {placeSuggestions.map((place) => (
+                            <button
+                              className={`place-suggestion ${overridePlaceId === place.placeId ? 'is-selected' : ''}`}
+                              key={place.placeId}
+                              type="button"
+                              onClick={() => selectSuggestedPlace(place)}
+                            >
+                              <span>{place.name}</span>
+                              <strong>{place.placeId}</strong>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
