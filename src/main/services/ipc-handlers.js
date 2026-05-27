@@ -111,6 +111,35 @@ function spawnDetached(filePath, args = []) {
   });
 }
 
+function extractBatchLocationError(loc) {
+  if (!loc) return 'No location in batch response';
+  if (!loc.errors || loc.errors.length === 0) return 'No locations in batch response';
+
+  const error = loc.errors[0] || {};
+  return error.Message || error.message || JSON.stringify(error) || 'Unknown batch error';
+}
+
+function buildDirectAssetDownloadUrls(assetId, placeIds = []) {
+  const encodedAssetId = encodeURIComponent(String(assetId));
+  const urls = new Set();
+
+  for (const placeId of placeIds) {
+    if (!placeId) continue;
+    const encodedPlaceId = encodeURIComponent(String(placeId));
+    urls.add(
+      `https://assetdelivery.roblox.com/v1/asset?id=${encodedAssetId}&placeId=${encodedPlaceId}`,
+    );
+    urls.add(
+      `https://assetdelivery.roblox.com/v1/asset/?id=${encodedAssetId}&placeId=${encodedPlaceId}`,
+    );
+  }
+
+  urls.add(`https://assetdelivery.roblox.com/v1/asset?id=${encodedAssetId}`);
+  urls.add(`https://assetdelivery.roblox.com/v1/asset/?id=${encodedAssetId}`);
+
+  return [...urls];
+}
+
 function getReleaseSourceLabel() {
   const owner = 'IncrediDev';
   const repo = 'ISpooferMotion';
@@ -1497,7 +1526,6 @@ async function handleSpooferAction(
     checkCancelled();
     await checkPaused();
     const loc = locationsMap[entry.id];
-    if (!loc) return { entry, success: false, error: 'No location in batch response' };
     const sanitizedName = sanitizeFilename(entry.name);
     const fileExtension = isSoundMode ? '.ogg' : '.rbxm';
     const fileName = `${sanitizedName}_${entry.id}${fileExtension}`;
@@ -1506,41 +1534,79 @@ async function handleSpooferAction(
     const downloadTransferId = downloadTransfer.id;
     const creatorKey = `${entry.creatorType}:${entry.creatorId}`;
     const entryPlaceIds = placeIdMap[creatorKey] || [99840799534728];
-    const entryPlaceId = Array.isArray(entryPlaceIds) ? entryPlaceIds[0] : entryPlaceIds;
+    const normalizedEntryPlaceIds = Array.isArray(entryPlaceIds) ? entryPlaceIds : [entryPlaceIds];
+    const entryPlaceId = normalizedEntryPlaceIds[0];
+    let result = null;
+    let batchErrorMessage = '';
 
-    if (loc.errors && loc.errors.length > 0) {
-      const errorObj = loc.errors[0];
-      const errorMsg =
-        errorObj.Message || errorObj.message || JSON.stringify(errorObj) || 'Unknown';
-      if (DEVELOPER_MODE) console.log('Batch error for', entry.id, ':', errorObj);
-
-      if (errorObj.code === 403) {
-        if (DEVELOPER_MODE) console.log(`(Dev) Skipping private asset ${entry.id}...`);
-        return { entry, success: false, error: 'Skipped (Private Asset)' };
+    const tryDownloadUrl = async (
+      url,
+      statusMessage,
+      placeIdForRequest = entryPlaceId,
+      suppressErrorUpdate = false,
+    ) => {
+      if (statusMessage) {
+        sendTransferUpdate({ id: downloadTransferId, status: 'processing', message: statusMessage });
+      } else {
+        sendTransferUpdate({ id: downloadTransferId, status: 'processing' });
       }
 
-      return { entry, success: false, error: `Batch error: ${errorMsg}` };
-    }
-    if (!loc.locations || loc.locations.length === 0)
-      return { entry, success: false, error: 'No locations in batch response' };
+      return downloadAnimationAssetWithProgress(
+        url,
+        robloxCookie,
+        filePath,
+        downloadTransferId,
+        entry.name,
+        entry.id,
+        sendTransferUpdate,
+        placeIdForRequest,
+        {
+          timeoutMs: DOWNLOAD_TIMEOUT_MS,
+          retries: DOWNLOAD_RETRIES,
+          retryDelayMs: DOWNLOAD_RETRY_DELAY_MS,
+          suppressErrorUpdate,
+        },
+      );
+    };
 
-    const url = loc.locations[0].location;
-    sendTransferUpdate({ id: downloadTransferId, status: 'processing' });
-    const result = await downloadAnimationAssetWithProgress(
-      url,
-      robloxCookie,
-      filePath,
-      downloadTransferId,
-      entry.name,
-      entry.id,
-      sendTransferUpdate,
-      entryPlaceId,
-      {
-        timeoutMs: DOWNLOAD_TIMEOUT_MS,
-        retries: DOWNLOAD_RETRIES,
-        retryDelayMs: DOWNLOAD_RETRY_DELAY_MS,
-      },
-    );
+    if (loc?.locations && loc.locations.length > 0 && loc.locations[0].location) {
+      result = await tryDownloadUrl(loc.locations[0].location);
+    } else {
+      batchErrorMessage = extractBatchLocationError(loc);
+      if (DEVELOPER_MODE) {
+        console.log(
+          `(Dev) Batch location failed for ${entry.id}: ${batchErrorMessage}. Trying direct asset fallback...`,
+        );
+      }
+
+      const directUrls = buildDirectAssetDownloadUrls(entry.id, normalizedEntryPlaceIds);
+      for (let index = 0; index < directUrls.length; index += 1) {
+        checkCancelled();
+        await checkPaused();
+        const urlPlaceId = new URL(directUrls[index]).searchParams.get('placeId') || entryPlaceId;
+        result = await tryDownloadUrl(
+          directUrls[index],
+          `Batch lookup failed; trying direct download fallback ${index + 1}/${directUrls.length}`,
+          urlPlaceId,
+          true,
+        );
+        if (result.success) break;
+      }
+
+      if (!result || !result.success) {
+        const directError = result?.error || 'Direct download fallback failed';
+        result = {
+          success: false,
+          error: `Batch error: ${batchErrorMessage}. Direct fallback: ${directError}`,
+        };
+        sendTransferUpdate({
+          id: downloadTransferId,
+          status: 'error',
+          error: result.error,
+        });
+      }
+    }
+
     downloadCompleted++;
     sendSpooferProgress({ current: downloadCompleted, total: animationEntries.length });
     const elapsed = (Date.now() - downloadStartTime) / 1000;

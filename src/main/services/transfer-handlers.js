@@ -211,6 +211,7 @@ async function downloadAnimationAssetWithProgress(
   const timeoutMs = getPositiveNumber(options.timeoutMs, DOWNLOAD_DEFAULTS.timeoutMs);
   const retries = getPositiveNumber(options.retries, DOWNLOAD_DEFAULTS.retries);
   const retryDelayMs = getPositiveNumber(options.retryDelayMs, DOWNLOAD_DEFAULTS.retryDelayMs);
+  const suppressErrorUpdate = Boolean(options.suppressErrorUpdate);
   const lastProgressRef = { value: 0 };
 
   sendTransferUpdateSafe(sendTransferUpdate, {
@@ -297,12 +298,14 @@ async function downloadAnimationAssetWithProgress(
       }
 
       if (!canRetry) {
-        sendTransferUpdateSafe(sendTransferUpdate, {
-          id: transferId,
-          status: 'error',
-          error: message,
-          progress: lastProgressRef.value || 0,
-        });
+        if (!suppressErrorUpdate) {
+          sendTransferUpdateSafe(sendTransferUpdate, {
+            id: transferId,
+            status: 'error',
+            error: message,
+            progress: lastProgressRef.value || 0,
+          });
+        }
         return { success: false, error: message };
       }
 
