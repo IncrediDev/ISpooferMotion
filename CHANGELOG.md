@@ -3,6 +3,7 @@
 ## v1.3.12-hotfix.1
 
 - **Private asset fallback fix:** Direct downloads now include the resolved Roblox cookie when retrying private assets, so assets the current account can access do not fail after the normal metadata lookup misses them.
+- **Download-only asset names:** Download mode now refreshes Roblox metadata before saving files, so both animation and sound downloads use the real asset names instead of falling back to asset IDs.
 
 ## v1.3.12
 
