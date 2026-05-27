@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.12-hotfix.1
+
+- **Private asset fallback fix:** Direct downloads now include the resolved Roblox cookie when retrying private assets, so assets the current account can access do not fail after the normal metadata lookup misses them.
+
 ## v1.3.12
 
 - **API key fixes:** Replacing an Open Cloud API key now properly overwrites the old key, validates the key when possible, and shows clearer messages for missing, invalid, expired, or permission-limited keys.
