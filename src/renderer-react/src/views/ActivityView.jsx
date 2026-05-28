@@ -13,7 +13,9 @@ export default function ActivityView({ isActive }) {
       try {
         const history = await window.electronAPI?.getJobs?.();
         if (history) setJobs(history);
-      } catch (e) {}
+      } catch (error) {
+        console.error('Failed to load jobs', error);
+      }
     };
     fetchJobs();
 
@@ -86,6 +88,21 @@ export default function ActivityView({ isActive }) {
     }
   };
 
+  const retryFailed = (job, failedEntriesText) => {
+    if (
+      window.confirm(
+        `Re-run only the ${failedEntriesText.split('\n').filter(Boolean).length} failed asset(s) from this job with the same settings?`,
+      )
+    ) {
+      if (job.payload) {
+        window.electronAPI?.runSpooferAction?.({
+          ...job.payload,
+          animationId: failedEntriesText,
+        });
+      }
+    }
+  };
+
   return (
     <section
       className={`view queue-view ${isActive ? 'is-active' : ''}`}
@@ -116,7 +133,7 @@ export default function ActivityView({ isActive }) {
           )}
 
           {jobs.map((job) => (
-            <JobCard key={job.id} job={job} redoJob={redoJob} deleteJob={deleteJob} />
+            <JobCard key={job.id} job={job} redoJob={redoJob} deleteJob={deleteJob} retryFailed={retryFailed} />
           ))}
         </div>
 
@@ -176,14 +193,61 @@ export default function ActivityView({ isActive }) {
   );
 }
 
-function JobCard({ job, redoJob, deleteJob }) {
+function parseJobSummary(output) {
+  if (!output) return null;
+  const total = output.match(/Total (?:animations|sounds):\s*(\d+)/i)?.[1];
+  const downloaded = output.match(/Downloaded:\s*(\d+)/i)?.[1];
+  const uploaded = output.match(/Uploaded:\s*(\d+)/i)?.[1];
+  const mode = /Download-Only/i.test(output) ? 'Download-Only' : 'Upload';
+  return { total, downloaded, uploaded, mode };
+}
+
+function extractFailedEntries(output, payload) {
+  if (!output || !payload?.animationId) return null;
+  // Find IDs that appear in failure lines
+  const failedIds = new Set();
+  const failurePattern = /(?:Download Failed|Upload Failed|UPLOAD FAILED|DOWNLOAD FAILED)[^(]*\(ID:\s*(\d+)\)/gi;
+  let m;
+  while ((m = failurePattern.exec(output))) {
+    failedIds.add(m[1]);
+  }
+  if (failedIds.size === 0) return null;
+
+  const filteredLines = payload.animationId
+    .split('\n')
+    .filter((line) => {
+      const idMatch = line.match(/\[(\d+)\]/);
+      return idMatch && failedIds.has(idMatch[1]);
+    })
+    .join('\n');
+
+  return filteredLines || null;
+}
+
+function JobCard({ job, redoJob, deleteJob, retryFailed }) {
   const [expanded, setExpanded] = useState(false);
 
-  let progressText = job.result?.message || 'Completed';
-  if (job.status === 'processing') progressText = 'Interrupted/Processing...';
-  else if (job.status === 'partial')
-    progressText = job.result?.message || 'Completed with some errors (Partial Completion)';
-  else if (job.status !== 'success') progressText = job.result?.message || 'Failed or Cancelled';
+  // job.output is the flat text field; job.result is not used (legacy check kept for resilience)
+  const output = job.output || job.result?.output || '';
+
+  let statusText = 'Completed';
+  if (job.status === 'processing') statusText = 'Interrupted / Processing…';
+  else if (job.status === 'partial') statusText = 'Completed with some errors';
+  else if (job.status === 'error') statusText = 'Failed or Cancelled';
+
+  const summary = parseJobSummary(output);
+  const failedEntries = extractFailedEntries(output, job.payload);
+
+  const collapsedInfo = summary
+    ? [
+        summary.mode && `Mode: ${summary.mode}`,
+        summary.total && `Total: ${summary.total}`,
+        summary.downloaded && `Downloaded: ${summary.downloaded}`,
+        summary.uploaded && `Uploaded: ${summary.uploaded}`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : null;
 
   return (
     <div
@@ -192,41 +256,64 @@ function JobCard({ job, redoJob, deleteJob }) {
     >
       <div className="job-card-header">
         <strong>
-          Upload Job • {new Date(job.timestamp).toLocaleTimeString()} (
-          {new Date(job.timestamp).toLocaleDateString()})
+          Upload Job · {new Date(job.timestamp).toLocaleTimeString()}{' '}
+          ({new Date(job.timestamp).toLocaleDateString()})
         </strong>
         <span className={`job-status ${job.status}`}>
           {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
         </span>
       </div>
+
+      {/* Collapsed summary — always visible even when not expanded */}
       <div className="job-details">
-        <span className="job-progress-text">{progressText}</span>
+        <span className="job-progress-text">{statusText}</span>
+        {collapsedInfo && (
+          <span className="job-collapsed-meta" style={{ fontSize: '11px', opacity: 0.65, marginTop: '2px', display: 'block' }}>
+            {collapsedInfo}
+          </span>
+        )}
       </div>
 
       <div
         className="job-actions"
-        style={{ marginTop: '10px', display: 'flex', gap: '10px' }}
+        style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}
         onClick={(e) => e.stopPropagation()}
       >
-        {job.result?.output && (
+        {output && (
           <button
             className="ui-button"
-            onClick={() => navigator.clipboard.writeText(job.result.output)}
+            id={`copy-job-logs-${job.id}`}
+            onClick={() => navigator.clipboard.writeText(output)}
           >
-            Copy Logs
+            Copy Output
           </button>
         )}
-        <button className="ui-button" onClick={() => redoJob(job)}>
+        <button className="ui-button" id={`redo-job-${job.id}`} onClick={() => redoJob(job)}>
           Redo Job
         </button>
-        <button className="ui-button ui-button-danger" onClick={() => deleteJob(job.id)}>
-          Delete Job
+        {failedEntries && (
+          <button
+            className="ui-button"
+            id={`retry-failed-${job.id}`}
+            style={{ borderColor: 'var(--accent, #f59e0b)', color: 'var(--accent, #f59e0b)' }}
+            onClick={() => retryFailed(job, failedEntries)}
+            title={`Retry ${failedEntries.split('\n').filter(Boolean).length} failed asset(s)`}
+          >
+            ↺ Retry Failed ({failedEntries.split('\n').filter(Boolean).length})
+          </button>
+        )}
+        <button
+          className="ui-button ui-button-danger"
+          id={`delete-job-${job.id}`}
+          onClick={() => deleteJob(job.id)}
+        >
+          Delete
         </button>
       </div>
 
       <div className="job-extended-details">
-        {job.result?.output ? (
-          <div dangerouslySetInnerHTML={{ __html: job.result.output.replace(/\n/g, '<br/>') }} />
+        {output ? (
+          <div dangerouslySetInnerHTML={{ __html: output.replace(/\n/g, '<br/>') }} />
         ) : (
           'No additional output details available.'
         )}
