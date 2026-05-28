@@ -3,7 +3,9 @@ const { app } = require('electron');
 const { setupAppLifecycle, getMainWindow } = require('./window');
 const { registerIpcHandlers } = require('./services/ipc-handlers');
 const { DEVELOPER_MODE, initializeFileLogging } = require('./services/common');
-const { checkForUpdates } = require('./services/updater');
+const { startLocalhostPluginServer, stopLocalhostPluginServer } = require('./services/localhost-plugin-server');
+
+let latestReplacementText = '';
 
 function getLogsDir() {
   return path.join(app.getPath('userData'), 'ispoofer_logs');
@@ -34,6 +36,8 @@ function sendTransferUpdate(transferData) {
 }
 
 function sendSpooferResultToRenderer(result) {
+  const output = typeof result === 'string' ? result : result?.output;
+  if (typeof output === 'string') latestReplacementText = output;
   return sendToRenderer('spoofer-result', result);
 }
 
@@ -49,9 +53,13 @@ function sendSpooferProgress(progressData) {
   return sendToRenderer('spoofer-progress', progressData);
 }
 
+function sendPluginScanResults(scanData) {
+  return sendToRenderer('localhost-scan-results', scanData);
+}
+
 function bootstrap() {
   app.name = 'ISpooferMotion';
-  if (app.isPackaged) {
+  if (process.platform === 'win32') {
     app.setAppUserModelId('com.github.IncrediDev.ISpooferMotion');
   }
   initializeFileLogging(getLogsDir());
@@ -64,7 +72,12 @@ function bootstrap() {
     sendSpooferProgress,
   );
   return setupAppLifecycle().then(() => {
-    checkForUpdates().catch((err) => console.error('Updater error:', err));
+    startLocalhostPluginServer({
+      sendScanResults: sendPluginScanResults,
+      sendStatusMessage,
+      getReplacementText: () => latestReplacementText,
+    });
+    app.once('before-quit', stopLocalhostPluginServer);
   });
 }
 

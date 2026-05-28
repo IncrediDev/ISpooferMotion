@@ -64,7 +64,7 @@ export default function SettingsView({ isActive }) {
 
   const colorPickerRef = useRef(null);
 
-  const fetchProfile = async () => {
+  async function fetchProfile() {
     try {
       const secrets = await window.electronAPI?.loadProfileSecrets?.();
       if (!secrets) return;
@@ -74,15 +74,17 @@ export default function SettingsView({ isActive }) {
       setNotifications(profile.notifications ?? true);
       setDefRetries(profile.defRetries ?? 3);
       setDefDelay(profile.defDelay ?? 5000);
-      setConcurrent(profile.concurrent ?? false);
+      setConcurrent(profile.concurrent ?? true);
       setMaxConcurrentDownload(profile.maxConcurrentDownloads ?? 20);
       setMaxConcurrent(profile.maxConcurrentUploads ?? 10);
 
       if (profile.colorR !== undefined) {
         handleColorChange(profile.colorR, profile.colorG, profile.colorB, false);
       }
-    } catch(e) {}
-  };
+    } catch (error) {
+      console.error('Failed to load settings profile', error);
+    }
+  }
 
   useEffect(() => {
     fetchProfile();
@@ -91,7 +93,7 @@ export default function SettingsView({ isActive }) {
     return () => window.removeEventListener('profile-changed', handler);
   }, []);
 
-  const updateSetting = async (key, val) => {
+  async function updateSetting(key, val) {
     if (!activeProfileId) return;
     try {
       const secrets = await window.electronAPI?.loadProfileSecrets?.();
@@ -100,10 +102,12 @@ export default function SettingsView({ isActive }) {
       if (!profile) return;
       profile[key] = val;
       await window.electronAPI?.saveProfileSecrets?.({ action: 'saveProfile', profileId: activeProfileId, secrets: profile });
-    } catch(e) {}
-  };
+    } catch (error) {
+      console.error('Failed to update setting', error);
+    }
+  }
 
-  const handleColorChange = (r, g, b, save = true) => {
+  function handleColorChange(r, g, b, save = true) {
     setColor({ r, g, b });
     const hex = rgbToHex(r, g, b);
     const root = document.documentElement;
@@ -117,7 +121,7 @@ export default function SettingsView({ isActive }) {
       updateSetting('colorG', g);
       updateSetting('colorB', b);
     }
-  };
+  }
 
   const hsv = rgbToHsv(color.r, color.g, color.b);
   const pureHue = hsvToRgb(hsv.h, 1, 1);

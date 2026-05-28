@@ -16,6 +16,34 @@ const ASSET_UPLOAD_URL = 'https://apis.roblox.com/assets/v1/assets';
 
 let rateLimitUntil = 0;
 
+// Per-replacement-name lock: prevents overlapping PATCH requests for the same
+// asset, which causes Roblox to return
+// "A newer version was created from a different request..."
+const replacementLocks = new Map();
+
+async function withReplacementLock(key, fn) {
+  const previous = replacementLocks.get(key) || Promise.resolve();
+
+  let release;
+  const current = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  const next = previous.catch(() => {}).then(() => current);
+  replacementLocks.set(key, next);
+
+  await previous.catch(() => {});
+
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (replacementLocks.get(key) === next) {
+      replacementLocks.delete(key);
+    }
+  }
+}
+
 function getErrorMessage(error, fallback = 'Unknown error') {
   return error instanceof Error ? error.message : String(error || fallback);
 }
@@ -532,37 +560,82 @@ async function publishAnimationRbxmWithProgress(
 
     if (options.replaceExisting) {
       const { findAssetByName } = require('./assets');
-      existingId = await findAssetByName(cookie, isAudio ? 3 : 24, name, groupId);
-      if (existingId) {
-        if (isAudio) {
-          if (options.onLog) {
-            options.onLog(`[Replace] Found existing audio "${name}" (ID: ${existingId}). Audio cannot be patched, skipping upload...`, 'success');
+
+      const replacementLockKey = `${assetType}:${groupId || userId || 'user'}:${String(name).trim().toLowerCase()}`;
+
+      return await withReplacementLock(replacementLockKey, async () => {
+        existingId = await findAssetByName(cookie, isAudio ? 3 : 24, name, groupId);
+        if (existingId) {
+          if (isAudio) {
+            if (options.onLog) {
+              options.onLog(`[Replace] Found existing audio "${name}" (ID: ${existingId}). Audio cannot be patched, skipping upload...`, 'success');
+            }
+            sendTransferUpdateSafe(sendTransferUpdate, {
+              id: transferId,
+              progress: 100,
+              status: 'completed',
+              newAssetId: String(existingId),
+            });
+            return { success: true, assetId: String(existingId), replacedId: existingId };
           }
-          sendTransferUpdateSafe(sendTransferUpdate, {
-            id: transferId,
-            progress: 100,
-            status: 'completed',
-            newAssetId: String(existingId),
-          });
-          return { success: true, assetId: String(existingId), replacedId: existingId };
+
+          if (DEVELOPER_MODE)
+            console.log(
+              `[UPLOAD DEBUG] Found existing asset ${existingId} for "${name}". Using PATCH.`,
+            );
+          method = 'PATCH';
+          url = `https://apis.roblox.com/assets/v1/assets/${existingId}`;
+
+          // Open Cloud PATCH does not allow assetType or creationContext
+          delete requestMetadata.assetType;
+          delete requestMetadata.creationContext;
+          requestMetadata.assetId = String(existingId);
+
+          if (options.onLog) {
+            options.onLog(`[Replace] Found and overwriting existing animation "${name}" (ID: ${existingId})...`, 'warn');
+          }
         }
 
-        if (DEVELOPER_MODE)
-          console.log(
-            `[UPLOAD DEBUG] Found existing asset ${existingId} for "${name}". Using PATCH.`,
+        const responseData = await uploadAsset(
+          fileBuffer,
+          fileName,
+          fileType,
+          requestMetadata,
+          apiKey,
+          transferId,
+          sendTransferUpdate,
+          method,
+          url,
+        );
+
+        if (responseData?.done && responseData.response) {
+          const assetId = getAssetIdFromResponse(responseData);
+          if (assetId) {
+            sendTransferUpdateSafe(sendTransferUpdate, {
+              id: transferId,
+              progress: 100,
+              status: 'completed',
+              newAssetId: String(assetId),
+            });
+            return { success: true, assetId: String(assetId), replacedId: existingId };
+          }
+        }
+
+        if (responseData?.path && !responseData.done) {
+          const assetId = await pollUploadOperation(
+            responseData,
+            apiKey,
+            assetType,
+            transferId,
+            sendTransferUpdate,
           );
-        method = 'PATCH';
-        url = `https://apis.roblox.com/assets/v1/assets/${existingId}`;
-
-        // Open Cloud PATCH does not allow assetType or creationContext
-        delete requestMetadata.assetType;
-        delete requestMetadata.creationContext;
-        requestMetadata.assetId = String(existingId);
-
-        if (options.onLog) {
-          options.onLog(`[Replace] Found and overwriting existing animation "${name}" (ID: ${existingId})...`, 'warn');
+          return { success: true, assetId, replacedId: existingId };
         }
-      }
+
+        throw new Error(
+          `Unexpected response from Open Cloud API: ${JSON.stringify(responseData || {})}`,
+        );
+      });
     }
 
     const responseData = await uploadAsset(

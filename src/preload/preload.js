@@ -29,7 +29,6 @@ const INVOKE_CHANNELS = new Set([
   'search-place-ids',
   'fetch-audio-quota',
   'select-folder',
-  'open-logs-folder',
   'open-plugins-folder',
   'copy-debug-info',
   'export-support-report',
@@ -41,6 +40,7 @@ const INVOKE_CHANNELS = new Set([
   'uninstall-app',
   'get-jobs',
   'delete-job',
+  'push-to-studio',
   'show-notification',
   'open-dev-console',
 ]);
@@ -51,6 +51,7 @@ const SUBSCRIBE_CHANNELS = new Set([
   'transfer-update',
   'spoofer-log',
   'spoofer-progress',
+  'localhost-scan-results',
 ]);
 
 function isRecord(value) {
@@ -116,6 +117,7 @@ const electronAPI = Object.freeze({
   onTransferUpdate: (callback) => subscribe('transfer-update', callback),
   onSpooferLog: (callback) => subscribe('spoofer-log', callback),
   onSpooferProgress: (callback) => subscribe('spoofer-progress', callback),
+  onLocalhostScanResults: (callback) => subscribe('localhost-scan-results', callback),
 
   getAppVersion: () => invoke('get-app-version'),
   getReleaseSource: () => invoke('get-release-source'),
@@ -161,6 +163,7 @@ const electronAPI = Object.freeze({
   uninstallApp: () => invoke('uninstall-app'),
   getJobs: () => invoke('get-jobs'),
   deleteJob: (jobId) => invoke('delete-job', jobId),
+  pushToStudio: (text) => invoke('push-to-studio', String(text || '')),
   clearSession: () => send('clear-session'),
 });
 

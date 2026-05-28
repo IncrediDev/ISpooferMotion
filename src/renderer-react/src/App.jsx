@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import DevConsoleGate from './components/DevConsoleGate';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
@@ -11,10 +11,6 @@ import SpooferView from './views/SpooferView';
 export default function App() {
   const [currentView, setCurrentView] = useState('spoofer');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  useEffect(() => {
-    // Add logic if we want to initialize profiles or settings globally
-  }, []);
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} id="app-shell">

@@ -1,10 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function TopBar({ toggleSidebar }) {
-  const [quotaText, setQuotaText] = useState('Checking quota...');
-  const [isQuotaOpen, setIsQuotaOpen] = useState(false);
-  const [isFlashing, setIsFlashing] = useState(false);
-  const popupRef = useRef(null);
   const [profilesInfo, setProfilesInfo] = useState({ activeId: null, profiles: {} });
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
@@ -18,74 +14,12 @@ export default function TopBar({ toggleSidebar }) {
             profiles: secrets.profiles || {},
           });
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error('Failed to load profiles for top bar', err);
+      }
     };
     fetchProfiles();
-
-    // In a real port, we'd use an event bus or Context for profile changes.
-    // For now, we will just listen to a custom event if needed or poll,
-    // but better to implement a context later.
   }, []);
-
-  const handleQuotaClick = async (e) => {
-    e.stopPropagation();
-    if (isQuotaOpen) {
-      setIsQuotaOpen(false);
-      return;
-    }
-
-    setIsQuotaOpen(true);
-    setIsFlashing(false);
-    setQuotaText('Checking quota...');
-
-    try {
-      // In a full implementation, we need the active profile's cookie
-      const secrets = await window.electronAPI?.loadProfileSecrets?.();
-      const activeProfile = secrets?.profiles?.[secrets.activeProfileId] || {};
-      const cookie = activeProfile.cookie || '';
-      const autoDetect = activeProfile.autoDetectCookie !== false;
-
-      const result = await window.electronAPI?.getAudioQuota?.({ cookie, autoDetect });
-
-      let used = 0;
-      let capacity = 0;
-
-      if (!result || result.error) {
-        setQuotaText(`Could not fetch quota: ${result?.error || 'Unknown'}`);
-        return;
-      }
-
-      if (Array.isArray(result.quotas)) {
-        const quota =
-          result.quotas.find((q) => String(q?.duration).toLowerCase() === 'month') ||
-          result.quotas[0];
-        used = Number(quota?.usage ?? quota?.used ?? quota?.consumed ?? 0);
-        capacity = Number(quota?.capacity ?? quota?.limit ?? quota?.total ?? 0);
-      } else if (result.usage && typeof result.usage === 'object') {
-        used = Number(result.usage.used ?? result.usage.usage ?? 0);
-        capacity = Number(result.usage.capacity ?? result.usage.total ?? result.usage.limit ?? 0);
-      } else {
-        used = Number(result.usage ?? result.used ?? 0);
-        capacity = Number(result.capacity ?? result.total ?? result.limit ?? 0);
-      }
-
-      if (capacity > 0) {
-        const remaining = Math.max(0, capacity - used);
-        setQuotaText(
-          `Audio quota: ${used.toLocaleString()} / ${capacity.toLocaleString()} used (${remaining.toLocaleString()} remaining)`,
-        );
-        if (used / capacity >= 0.8) {
-          setIsFlashing(true);
-        }
-      } else {
-        setQuotaText('Quota data unavailable.');
-      }
-    } catch (err) {
-      setQuotaText(`Could not fetch quota: ${err.message}`);
-    }
-
-    setTimeout(() => setIsQuotaOpen(false), 8000);
-  };
 
   const activeProfileName = profilesInfo.profiles[profilesInfo.activeId]?.name || 'Profile 1';
 
