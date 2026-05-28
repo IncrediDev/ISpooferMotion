@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.3.12-hotfix.2
+
+- **Large plugin output fix:** Studio plugin scan results are split into numbered output scripts when they exceed Roblox's script source length limit.
+- **Hotfix version display:** The app sidebar now shows the hotfix release label for this build.
+
 ## v1.3.12-hotfix.1
 
 - **Private asset fallback fix:** Direct downloads now include the resolved Roblox cookie when retrying private assets, so assets the current account can access do not fail after the normal metadata lookup misses them.
