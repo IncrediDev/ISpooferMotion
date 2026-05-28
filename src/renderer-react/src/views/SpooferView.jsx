@@ -291,7 +291,7 @@ export default function SpooferView({ isActive }) {
       downloadRetries: 2,
       downloadRetryDelayMs: 2000,
       downloadTimeoutMs: 15000,
-      concurrentUploads: profile.concurrent ?? false,
+      concurrentUploads: profile.concurrent ?? true,
       maxConcurrentUploads: profile.maxConcurrentUploads ?? 10,
       replaceExisting,
       renamePrefix: '', // Can be loaded from settings

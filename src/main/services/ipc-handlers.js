@@ -272,6 +272,7 @@ function migrateProfileSecrets(allSecrets) {
                 cookie: '',
                 apiKey: '',
                 groupId: '',
+                concurrent: true,
               },
             },
     };
@@ -285,6 +286,7 @@ function migrateProfileSecrets(allSecrets) {
           cookie: '',
           apiKey: '',
           groupId: '',
+          concurrent: true,
         },
       },
     };
@@ -302,6 +304,7 @@ async function loadProfileSecrets() {
       cookie: '',
       apiKey: '',
       groupId: '',
+      concurrent: true,
     };
   }
   if (!migrated.activeProfileId || !migrated.profiles[migrated.activeProfileId]) {

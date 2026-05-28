@@ -74,7 +74,7 @@ export default function SettingsView({ isActive }) {
       setNotifications(profile.notifications ?? true);
       setDefRetries(profile.defRetries ?? 3);
       setDefDelay(profile.defDelay ?? 5000);
-      setConcurrent(profile.concurrent ?? false);
+      setConcurrent(profile.concurrent ?? true);
       setMaxConcurrentDownload(profile.maxConcurrentDownloads ?? 20);
       setMaxConcurrent(profile.maxConcurrentUploads ?? 10);
 
