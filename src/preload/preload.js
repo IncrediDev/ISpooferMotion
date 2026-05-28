@@ -25,6 +25,8 @@ const INVOKE_CHANNELS = new Set([
   'save-profile-secrets',
   'clear-profile-secrets',
   'get-roblox-profile',
+  'validate-opencloud-api-key',
+  'search-place-ids',
   'fetch-audio-quota',
   'select-folder',
   'open-logs-folder',
@@ -132,6 +134,8 @@ const electronAPI = Object.freeze({
   saveProfileSecrets: (data) => invoke('save-profile-secrets', asRecord(data)),
   clearProfileSecrets: (profileId) => invoke('clear-profile-secrets', profileId),
   getRobloxProfile: (context) => invoke('get-roblox-profile', asRecord(context)),
+  validateOpenCloudApiKey: (apiKey) => invoke('validate-opencloud-api-key', String(apiKey || '')),
+  searchPlaceIds: (context) => invoke('search-place-ids', asRecord(context)),
 
   runSpooferAction: (data) => send('run-spoofer-action', asRecord(data)),
   pauseSpoofer: () => send('spoofer-pause'),

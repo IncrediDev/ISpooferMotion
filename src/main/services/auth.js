@@ -14,6 +14,7 @@ const ROBLOX_COOKIE_PATTERN =
 const ROBLOX_STUDIO_COOKIE_TARGET = 'https://www.roblox.com:RobloxStudioAuth.ROBLOSECURITY';
 const ROBLOX_USER_AGENT = 'RobloxStudio/WinInet';
 const DEFAULT_TIMEOUT_MS = 15_000;
+const BROWSER_COOKIE_SCAN_BYTES = 25 * 1024 * 1024;
 
 function debugLog(...args) {
   if (DEVELOPER_MODE) console.log(...args);
@@ -55,6 +56,135 @@ function extractRobloxCookie(rawValue) {
   if (!rawValue) return undefined;
   const text = Buffer.isBuffer(rawValue) ? rawValue.toString('latin1') : String(rawValue);
   return text.match(ROBLOX_COOKIE_PATTERN)?.[0];
+}
+
+async function readPossibleCookieFile(filePath) {
+  try {
+    const handle = await fs.open(filePath, 'r');
+    try {
+      const stat = await handle.stat();
+      const length = Math.min(stat.size, BROWSER_COOKIE_SCAN_BYTES);
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, 0);
+      return extractRobloxCookie(buffer);
+    } finally {
+      await handle.close();
+    }
+  } catch (err) {
+    debugWarn('(Dev) Could not scan browser cookie file:', filePath, err.message);
+    return undefined;
+  }
+}
+
+async function findExistingFiles(paths) {
+  const existing = [];
+  for (const filePath of paths) {
+    try {
+      const stat = await fs.stat(filePath);
+      if (stat.isFile()) existing.push(filePath);
+    } catch {}
+  }
+  return existing;
+}
+
+function getBrowserCookieFileCandidates() {
+  const home = os.homedir();
+  const candidates = [];
+
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const roaming = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const chromiumRoots = [
+      path.join(local, 'Google', 'Chrome', 'User Data'),
+      path.join(local, 'Microsoft', 'Edge', 'User Data'),
+      path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data'),
+      path.join(roaming, 'Opera Software', 'Opera Stable'),
+      path.join(roaming, 'Opera Software', 'Opera GX Stable'),
+    ];
+
+    for (const root of chromiumRoots) {
+      for (const profile of ['Default', 'Profile 1', 'Profile 2', 'Profile 3']) {
+        candidates.push(path.join(root, profile, 'Network', 'Cookies'));
+        candidates.push(path.join(root, profile, 'Cookies'));
+      }
+      candidates.push(path.join(root, 'Network', 'Cookies'));
+      candidates.push(path.join(root, 'Cookies'));
+    }
+
+    candidates.push(path.join(roaming, 'Mozilla', 'Firefox', 'Profiles'));
+  } else if (process.platform === 'darwin') {
+    const appSupport = path.join(home, 'Library', 'Application Support');
+    for (const root of [
+      path.join(appSupport, 'Google', 'Chrome'),
+      path.join(appSupport, 'Microsoft Edge'),
+      path.join(appSupport, 'BraveSoftware', 'Brave-Browser'),
+    ]) {
+      for (const profile of ['Default', 'Profile 1', 'Profile 2', 'Profile 3']) {
+        candidates.push(path.join(root, profile, 'Network', 'Cookies'));
+        candidates.push(path.join(root, profile, 'Cookies'));
+      }
+    }
+    candidates.push(path.join(appSupport, 'Firefox', 'Profiles'));
+  }
+
+  return candidates;
+}
+
+async function expandBrowserCookieCandidates() {
+  const candidates = [];
+  for (const candidate of getBrowserCookieFileCandidates()) {
+    if (path.basename(candidate) === 'Profiles') {
+      try {
+        const entries = await fs.readdir(candidate, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            candidates.push(path.join(candidate, entry.name, 'cookies.sqlite'));
+          }
+        }
+      } catch {}
+    } else {
+      candidates.push(candidate);
+    }
+  }
+  return findExistingFiles([...new Set(candidates)]);
+}
+
+async function getCookieFromBrowserProfiles() {
+  if (!['darwin', 'win32'].includes(process.platform)) return undefined;
+
+  const files = await expandBrowserCookieCandidates();
+  for (const filePath of files) {
+    const cookie = await readPossibleCookieFile(filePath);
+    if (cookie) {
+      debugLog(`(Dev) Found Roblox cookie in browser profile file: ${filePath}`);
+      return cookie;
+    }
+  }
+  return undefined;
+}
+
+async function getCookieFromAutoDetect(userId = null) {
+  const studioAttempt = getCookieFromRobloxStudio(userId).then((cookie) => ({ source: 'studio', cookie, id: 'studio' })).catch((err) => {
+      debugWarn('(Dev) Studio cookie auto-detect failed:', err.message);
+      return { source: 'studio', cookie: undefined, id: 'studio' };
+    });
+  studioAttempt.id = 'studio';
+  const browserAttempt = getCookieFromBrowserProfiles().then((cookie) => ({ source: 'browser', cookie, id: 'browser' })).catch((err) => {
+      debugWarn('(Dev) Browser cookie auto-detect failed:', err.message);
+      return { source: 'browser', cookie: undefined, id: 'browser' };
+    });
+  browserAttempt.id = 'browser';
+  let attempts = [studioAttempt, browserAttempt];
+
+  while (attempts.length > 0) {
+    const result = await Promise.race(attempts);
+    attempts = attempts.filter((attempt) => attempt.id !== result.id);
+    if (result.cookie) {
+      debugLog(`(Dev) Auto-detected Roblox cookie from ${result.source}`);
+      return result.cookie;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -187,6 +317,8 @@ async function getAuthenticatedUserId(cookie) {
 
 module.exports = {
   getCookieFromRobloxStudio,
+  getCookieFromBrowserProfiles,
+  getCookieFromAutoDetect,
   getCsrfToken,
   getAuthenticatedUserId,
   withTimeout,

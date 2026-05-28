@@ -9,6 +9,7 @@ export default function ProfilesView({ isActive }) {
   const [autoDetect, setAutoDetect] = useState(true);
   const [groupId, setGroupId] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [apiKeyStatus, setApiKeyStatus] = useState('');
 
   const [robloxData, setRobloxData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -66,31 +67,53 @@ export default function ProfilesView({ isActive }) {
     setIsLoading(false);
   };
 
+  const makeUniqueProfileName = (name, excludeId = null) => {
+    const baseName = String(name || 'Unnamed Profile').trim() || 'Unnamed Profile';
+    const existingNames = new Set(
+      Object.entries(profiles)
+        .filter(([id]) => id !== excludeId)
+        .map(([, profile]) => String(profile.name || '').trim().toLowerCase()),
+    );
+    if (!existingNames.has(baseName.toLowerCase())) return baseName;
+
+    let index = 2;
+    let candidate = `${baseName} ${index}`;
+    while (existingNames.has(candidate.toLowerCase())) {
+      index += 1;
+      candidate = `${baseName} ${index}`;
+    }
+    return candidate;
+  };
+
   const updateProfile = async (updates) => {
     if (!activeId) return;
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.name !== undefined) {
+      normalizedUpdates.name = makeUniqueProfileName(normalizedUpdates.name, activeId);
+    }
     const newProfiles = { ...profiles };
-    newProfiles[activeId] = { ...newProfiles[activeId], ...updates };
+    newProfiles[activeId] = { ...newProfiles[activeId], ...normalizedUpdates };
     setProfiles(newProfiles);
 
-    if (updates.name !== undefined) setProfileName(updates.name);
-    if (updates.cookie !== undefined) setCookie(updates.cookie);
-    if (updates.autoDetectCookie !== undefined) setAutoDetect(updates.autoDetectCookie);
-    if (updates.groupId !== undefined) setGroupId(updates.groupId);
-    if (updates.apiKey !== undefined) setApiKey(updates.apiKey);
+    if (normalizedUpdates.name !== undefined) setProfileName(normalizedUpdates.name);
+    if (normalizedUpdates.cookie !== undefined) setCookie(normalizedUpdates.cookie);
+    if (normalizedUpdates.autoDetectCookie !== undefined) setAutoDetect(normalizedUpdates.autoDetectCookie);
+    if (normalizedUpdates.groupId !== undefined) setGroupId(normalizedUpdates.groupId);
+    if (normalizedUpdates.apiKey !== undefined) setApiKey(normalizedUpdates.apiKey);
 
     await window.electronAPI?.saveProfileSecrets?.({
-      action: 'saveProfile',
+      action: 'patchProfile',
       profileId: activeId,
-      secrets: newProfiles[activeId],
+      secrets: normalizedUpdates,
     });
 
     // trigger a global update so top bar updates name
     window.dispatchEvent(new Event('profile-changed'));
 
     if (
-      updates.cookie !== undefined ||
-      updates.groupId !== undefined ||
-      updates.autoDetectCookie !== undefined
+      normalizedUpdates.cookie !== undefined ||
+      normalizedUpdates.groupId !== undefined ||
+      normalizedUpdates.autoDetectCookie !== undefined
     ) {
       const p = newProfiles[activeId];
       fetchRobloxData(p.cookie, p.groupId, p.autoDetectCookie ?? true);
@@ -99,7 +122,7 @@ export default function ProfilesView({ isActive }) {
 
   const createProfile = async () => {
     const newId = `profile_${Date.now()}`;
-    const newProfile = { name: 'New Profile', cookie: '', apiKey: '', groupId: '' };
+    const newProfile = { name: makeUniqueProfileName('New Profile'), cookie: '', apiKey: '', groupId: '' };
     await window.electronAPI?.saveProfileSecrets?.({
       action: 'saveProfile',
       profileId: newId,
@@ -111,6 +134,30 @@ export default function ProfilesView({ isActive }) {
     setActiveId(newId);
     applyProfileToState(newId, updatedProfiles);
     window.dispatchEvent(new Event('profile-changed'));
+  };
+
+  const saveApiKey = async () => {
+    if (!activeId) return;
+    const trimmed = apiKey.trim();
+    setApiKey(trimmed);
+    if (!trimmed) {
+      await updateProfile({ apiKey: '' });
+      setApiKeyStatus('API key removed.');
+      return;
+    }
+
+    setApiKeyStatus('Checking API key...');
+    try {
+      const result = await window.electronAPI?.validateOpenCloudApiKey?.(trimmed);
+      if (!result?.ok) {
+        setApiKeyStatus(result?.message || 'API key is invalid.');
+        return;
+      }
+      await updateProfile({ apiKey: trimmed });
+      setApiKeyStatus(result.message || 'API key saved.');
+    } catch (err) {
+      setApiKeyStatus(`Could not validate API key: ${err.message}`);
+    }
   };
 
   const deleteProfile = async () => {
@@ -223,7 +270,7 @@ export default function ProfilesView({ isActive }) {
                 autoComplete="off"
                 spellCheck="false"
                 value={groupId}
-                onChange={(e) => updateProfile({ groupId: e.target.value })}
+                onChange={(e) => updateProfile({ groupId: e.target.value.replace(/\D/g, '') })}
               />
               <span>Roblox Group ID</span>
             </label>
@@ -237,7 +284,11 @@ export default function ProfilesView({ isActive }) {
                   autoComplete="off"
                   spellCheck="false"
                   value={apiKey}
-                  onChange={(e) => updateProfile({ apiKey: e.target.value })}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    setApiKeyStatus('Unsaved changes. Leave the field to validate and save.');
+                  }}
+                  onBlur={saveApiKey}
                 />
                 <span>Open Cloud API Key</span>
                 <button
@@ -255,6 +306,7 @@ export default function ProfilesView({ isActive }) {
                   Get Key
                 </button>
               </div>
+              {apiKeyStatus && <span className="field-status">{apiKeyStatus}</span>}
             </label>
           </div>
 
@@ -264,13 +316,14 @@ export default function ProfilesView({ isActive }) {
             style={{ display: !cookie && !autoDetect ? 'none' : 'flex' }}
           >
             <div className="roblox-data-col" id="profile-user-data" style={{ display: 'flex' }}>
-              <img
-                src={robloxData?.user?.avatarUrl || ''}
-                className="roblox-avatar"
-                id="profile-user-avatar"
-                alt="User Avatar"
-                style={{ display: robloxData?.user ? 'block' : 'none' }}
-              />
+              {robloxData?.user?.avatarUrl && (
+                <img
+                  src={robloxData.user.avatarUrl}
+                  className="roblox-avatar"
+                  id="profile-user-avatar"
+                  alt="User Avatar"
+                />
+              )}
               <div className="roblox-data-info">
                 <span className="roblox-data-name" id="profile-user-name">
                   {isLoading ? 'Loading...' : robloxData?.user?.name || 'Invalid Cookie'}
@@ -293,13 +346,14 @@ export default function ProfilesView({ isActive }) {
                   id="profile-group-data"
                   style={{ display: 'flex' }}
                 >
-                  <img
-                    src={robloxData?.group?.iconUrl || ''}
-                    className="roblox-avatar"
-                    id="profile-group-icon"
-                    alt="Group Icon"
-                    style={{ display: robloxData?.group ? 'block' : 'none' }}
-                  />
+                  {robloxData?.group?.iconUrl && (
+                    <img
+                      src={robloxData.group.iconUrl}
+                      className="roblox-avatar"
+                      id="profile-group-icon"
+                      alt="Group Icon"
+                    />
+                  )}
                   <div className="roblox-data-info">
                     <span className="roblox-data-name" id="profile-group-name">
                       {isLoading ? 'Loading...' : robloxData?.group?.name || 'Invalid Group ID'}

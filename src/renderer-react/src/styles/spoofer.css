@@ -99,8 +99,114 @@
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
-.advanced-fields .floating-label:nth-child(3) {
+.advanced-dropdown {
   grid-column: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.advanced-dropdown-trigger {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: max-content 1fr 18px;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+.advanced-dropdown-trigger strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.advanced-dropdown.is-open .profile-trigger-arrow {
+  transform: rotate(180deg);
+}
+.advanced-dropdown-panel {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-control);
+}
+.advanced-dropdown.is-open .advanced-dropdown-panel {
+  display: flex;
+}
+.place-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.place-search-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.place-search-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.place-search-button {
+  height: 48px;
+}
+.place-type-picker {
+  width: 100%;
+  margin-left: 0;
+  z-index: calc(var(--z-popup) + 1);
+}
+.place-type-picker .profile-trigger {
+  width: 100%;
+  height: 48px;
+  min-height: 48px;
+}
+.place-search-input {
+  min-width: 0;
+}
+.place-suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.place-suggestion {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--surface-control);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  text-align: left;
+}
+.place-suggestion span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.place-suggestion strong {
+  color: var(--accent);
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+.place-suggestion:hover,
+.place-suggestion.is-selected {
+  border-color: var(--accent);
+  background: var(--surface-control-hover);
 }
 /* Floating Labels */
 .floating-label {
@@ -112,10 +218,14 @@
   padding: 20px 12px 6px;
   height: 48px;
 }
-.floating-label span {
+.floating-label span:not(.field-status) {
   position: absolute;
   left: 12px;
   top: 50%;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transform: translateY(-50%);
   color: var(--muted-2);
   font-size: 12px;
@@ -123,15 +233,25 @@
   transition: all 0.2s ease;
   pointer-events: none;
 }
-.floating-label input:focus + span,
-.floating-label input:not(:placeholder-shown) + span,
-.floating-label input:disabled + span {
+.floating-label input:focus + span:not(.field-status),
+.floating-label input:not(:placeholder-shown) + span:not(.field-status),
+.floating-label input:disabled + span:not(.field-status) {
   top: 14px;
   font-size: 10px;
   color: var(--muted);
 }
-.floating-label input:focus + span {
+.floating-label input:focus + span:not(.field-status) {
   color: var(--accent);
+}
+.field-status {
+  display: block;
+  position: static;
+  transform: none;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: auto;
 }
 /* API Key Row */
 .api-key-row .embedded-button-row {

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
+const FALLBACK_APP_VERSION = '1.3.12-hotfix.2';
+const TOUR_VERSION_KEY = 'ism_seen_tour_version';
+
 const STEPS = [
   {
     title: 'Welcome to ISpooferMotion!',
@@ -124,25 +127,9 @@ export default function TourOverlay() {
   const [currentStep, setCurrentStep] = useState(0);
   const [holeStyle, setHoleStyle] = useState({});
   const [tooltipStyle, setTooltipStyle] = useState({});
+  const appVersionRef = useRef('unknown');
 
   const tooltipRef = useRef(null);
-
-  useEffect(() => {
-    const hasSeenTour = localStorage.getItem('ism_has_seen_tour');
-    if (!hasSeenTour) {
-      setTimeout(() => startTour(), 1000);
-    }
-
-    const startTourHandler = () => startTour();
-    window.addEventListener('start-tour', startTourHandler);
-    return () => window.removeEventListener('start-tour', startTourHandler);
-  }, []);
-
-  useEffect(() => {
-    if (active) {
-      renderStep();
-    }
-  }, [currentStep, active]);
 
   const startTour = () => {
     setCurrentStep(0);
@@ -153,24 +140,14 @@ export default function TourOverlay() {
   const endTour = () => {
     setActive(false);
     document.body.classList.remove('tour-active');
-    localStorage.setItem('ism_has_seen_tour', 'true');
-    // We would need to tell App to switch view to spoofer here if needed
-  };
-
-  const nextStep = () => {
-    if (currentStep < STEPS.length - 1) setCurrentStep((c) => c + 1);
-    else endTour();
-  };
-
-  const prevStep = () => {
-    if (currentStep > 0) setCurrentStep((c) => c - 1);
+    try {
+      window.localStorage?.setItem(TOUR_VERSION_KEY, appVersionRef.current);
+    } catch {}
   };
 
   const renderStep = () => {
     const step = STEPS[currentStep];
 
-    // Attempt to trigger view change via App component state?
-    // Since TourOverlay is outside the view router in App.jsx, we can click the side-link
     if (step.view) {
       const btn = document.querySelector(
         `.side-link[title='${step.view === 'spoofer' ? 'Spoofer' : step.view === 'queue' ? 'Activity' : step.view === 'settings' ? 'Settings' : 'Profiles'}']`,
@@ -227,6 +204,52 @@ export default function TourOverlay() {
         setTooltipStyle({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' });
       }
     }, 200);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const maybeStartTour = async () => {
+      let version = FALLBACK_APP_VERSION;
+      try {
+        version = (await window.electronAPI?.getAppVersion?.()) || FALLBACK_APP_VERSION;
+      } catch {}
+      if (cancelled) return;
+      appVersionRef.current = String(version);
+      let seenVersion = null;
+      try {
+        seenVersion = window.localStorage?.getItem(TOUR_VERSION_KEY) || null;
+      } catch {}
+      if (seenVersion !== appVersionRef.current) {
+        setTimeout(() => {
+          if (!cancelled) startTour();
+        }, 1000);
+      }
+    };
+
+    maybeStartTour();
+
+    const startTourHandler = () => startTour();
+    window.addEventListener('start-tour', startTourHandler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('start-tour', startTourHandler);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (active) {
+      renderStep();
+    }
+  }, [currentStep, active]);
+
+  const nextStep = () => {
+    if (currentStep < STEPS.length - 1) setCurrentStep((c) => c + 1);
+    else endTour();
+  };
+
+  const prevStep = () => {
+    if (currentStep > 0) setCurrentStep((c) => c - 1);
   };
 
   if (!active) return null;

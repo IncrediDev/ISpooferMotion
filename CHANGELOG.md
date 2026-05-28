@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.3.12-hotfix.2
+
+- **Large plugin output fix:** Studio plugin scan results are split into numbered output scripts when they exceed Roblox's script source length limit.
+- **Hotfix version display:** The app sidebar now shows the hotfix release label for this build.
+
+## v1.3.12-hotfix.1
+
+- **Private asset fallback fix:** Direct downloads now include the resolved Roblox cookie when retrying private assets, so assets the current account can access do not fail after the normal metadata lookup misses them.
+- **Download-only asset names:** Download mode now refreshes Roblox metadata before saving files, so both animation and sound downloads use the real asset names instead of falling back to asset IDs.
+
+## v1.3.12
+
+- **API key fixes:** Replacing an Open Cloud API key now properly overwrites the old key, validates the key when possible, and shows clearer messages for missing, invalid, expired, or permission-limited keys.
+- **Profile fixes:** Updating a profile now fully replaces the old profile data instead of merging stale values back in, with safer saving so profile changes persist more reliably.
+- **Animation and sound mapping fixes:** Improved processing so valid assets can still produce mappings when other assets fail, with clearer summaries for failed downloads/uploads instead of generic "no mappings" errors.
+- **Better Place ID discovery:** Added automatic Place ID lookup from a User ID or Group ID, including multi-place suggestions and saving the selected place.
+- **More reliable Place ID lookup:** Place search now tries more Roblox lookup paths, can fall back between user-owned and group-owned results for the same ID, and shows clearer next steps instead of failing with a generic "no places found" error.
+- **Cookie auto-detect improvements:** Auto detect now checks Roblox Studio and browser profiles and uses whichever valid cookie it finds first.
+- **Welcome tour improvements:** The welcome tour now appears on first launch and after new app versions.
+- **Roblox Studio plugin fixes:** Improved ID extraction for animations and sounds, reduced scan throttling, and added better messages when IDs are found but Roblox metadata cannot confirm them.
+- **Fresh plugin scans:** The Studio plugin now scans the live place each time instead of relying on indexing or cached scan results, so newly added or changed animation and sound IDs are picked up consistently.
+- **Cleaner pasted plugin output:** The app now ignores the generated script wrapper, `TYPE:` marker lines, and whitespace-only or invisible formatting lines when pasted into the spoof input, preventing noisy invalid-line errors.
+
 ## v1.3.11
 
 - **Interactive Welcome Tour:** Added a interactive onboarding tour to guide new users through setting up their cookies, API keys, and run options.

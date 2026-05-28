@@ -211,6 +211,7 @@ async function downloadAnimationAssetWithProgress(
   const timeoutMs = getPositiveNumber(options.timeoutMs, DOWNLOAD_DEFAULTS.timeoutMs);
   const retries = getPositiveNumber(options.retries, DOWNLOAD_DEFAULTS.retries);
   const retryDelayMs = getPositiveNumber(options.retryDelayMs, DOWNLOAD_DEFAULTS.retryDelayMs);
+  const suppressErrorUpdate = Boolean(options.suppressErrorUpdate);
   const lastProgressRef = { value: 0 };
 
   sendTransferUpdateSafe(sendTransferUpdate, {
@@ -297,12 +298,14 @@ async function downloadAnimationAssetWithProgress(
       }
 
       if (!canRetry) {
-        sendTransferUpdateSafe(sendTransferUpdate, {
-          id: transferId,
-          status: 'error',
-          error: message,
-          progress: lastProgressRef.value || 0,
-        });
+        if (!suppressErrorUpdate) {
+          sendTransferUpdateSafe(sendTransferUpdate, {
+            id: transferId,
+            status: 'error',
+            error: message,
+            progress: lastProgressRef.value || 0,
+          });
+        }
         return { success: false, error: message };
       }
 
@@ -497,7 +500,7 @@ async function publishAnimationRbxmWithProgress(
 
   if (!apiKey) {
     const assetLabel = isAudio ? 'Sound' : 'Animation';
-    const error = `${assetLabel} uploads require an Open Cloud API key. Go to create.roblox.com → Open Cloud → API Keys and create a key with Assets Read & Write permissions.`;
+    const error = `${assetLabel} uploads require an Open Cloud API key. Go to create.roblox.com -> Open Cloud -> API Keys and create a key with Assets Read & Write permissions.`;
     sendTransferUpdateSafe(sendTransferUpdate, {
       id: transferId,
       status: 'error',
@@ -529,9 +532,9 @@ async function publishAnimationRbxmWithProgress(
 
     if (options.replaceExisting) {
       const { findAssetByName } = require('./assets');
-      existingId = await findAssetByName(cookie, assetType, name, groupId);
+      existingId = await findAssetByName(cookie, isAudio ? 3 : 24, name, groupId);
       if (existingId) {
-        if (String(assetType) === "3") {
+        if (isAudio) {
           if (options.onLog) {
             options.onLog(`[Replace] Found existing audio "${name}" (ID: ${existingId}). Audio cannot be patched, skipping upload...`, 'success');
           }
@@ -550,12 +553,12 @@ async function publishAnimationRbxmWithProgress(
           );
         method = 'PATCH';
         url = `https://apis.roblox.com/assets/v1/assets/${existingId}`;
-        
+
         // Open Cloud PATCH does not allow assetType or creationContext
         delete requestMetadata.assetType;
         delete requestMetadata.creationContext;
         requestMetadata.assetId = String(existingId);
-        
+
         if (options.onLog) {
           options.onLog(`[Replace] Found and overwriting existing animation "${name}" (ID: ${existingId})...`, 'warn');
         }
