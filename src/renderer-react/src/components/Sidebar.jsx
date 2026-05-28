@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react';
 import appIcon from '../assets/app_icon.png';
 
+function formatVersionTag(version) {
+  const value = String(version || '1.3.12-hotfix.2').replace(/^-?v/i, '');
+  return `v${value.replace(/-hotfix\./i, '.hotfix.')}`;
+}
+
 export default function Sidebar({ currentView, setCurrentView }) {
-  const [version, setVersion] = useState('v1.3.12');
+  const [version, setVersion] = useState('v1.3.12.hotfix.2');
   const [source, setSource] = useState('Release source...');
 
   useEffect(() => {
     const fetchMeta = async () => {
       try {
+        const appVersion = await window.electronAPI?.getAppVersion?.();
+        if (appVersion) setVersion(formatVersionTag(appVersion));
         const releaseSource = await window.electronAPI?.getReleaseSource?.();
         if (releaseSource) setSource(releaseSource);
       } catch (err) {
