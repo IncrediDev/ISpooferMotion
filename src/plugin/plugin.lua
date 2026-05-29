@@ -29,6 +29,7 @@ soundsButton.ClickableWhenViewportHidden = true
 local scanInProgress = false
 local replaceInProgress = false
 local activeBaseUrl = BASE_URLS[1]
+local completedScanCount = 0
 local studioUserId = 0
 pcall(function()
   studioUserId = plugin:GetStudioUserId()
@@ -83,6 +84,137 @@ local SOUND_SIGNALS = {
 local function setButtonsEnabled(enabled)
   pcall(function() animationsButton.Enabled = enabled end)
   pcall(function() soundsButton.Enabled = enabled end)
+end
+
+
+local function formatDuration(seconds)
+  seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+  if seconds >= 3600 then
+    local hours = math.floor(seconds / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    local secs = seconds % 60
+    return string.format("%dh %02dm %02ds", hours, minutes, secs)
+  elseif seconds >= 60 then
+    local minutes = math.floor(seconds / 60)
+    local secs = seconds % 60
+    return string.format("%dm %02ds", minutes, secs)
+  end
+  return tostring(seconds) .. "s"
+end
+
+local function shortenText(text, maxLength)
+  text = tostring(text or "")
+  maxLength = tonumber(maxLength) or 120
+  if #text <= maxLength then
+    return text
+  end
+  return text:sub(1, maxLength - 3) .. "..."
+end
+
+local function safeFullName(obj)
+  local ok, fullName = pcall(function()
+    return obj:GetFullName()
+  end)
+  if ok and fullName then
+    return tostring(fullName)
+  end
+  return tostring(obj and obj.Name or "Unknown")
+end
+
+local function summarizeMappings(ordered, maxItems)
+  maxItems = tonumber(maxItems) or 3
+  local parts = {}
+  for i, mapping in ipairs(ordered or {}) do
+    if i > maxItems then break end
+    table.insert(parts, tostring(mapping.oldId) .. " -> " .. tostring(mapping.newId))
+  end
+  local remaining = #(ordered or {}) - #parts
+  if remaining > 0 then
+    table.insert(parts, "+" .. tostring(remaining) .. " more")
+  end
+  return table.concat(parts, "  |  ")
+end
+
+local function createDimmerProgressGui(name, titleText)
+  local gui = Instance.new("ScreenGui")
+  gui.Name = name
+  gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+  gui.Parent = game:GetService("CoreGui")
+
+  local bg = Instance.new("Frame")
+  bg.BackgroundColor3 = Color3.new(0, 0, 0)
+  bg.BackgroundTransparency = 0.5
+  bg.Size = UDim2.fromScale(1, 1)
+  bg.Parent = gui
+
+  local statusLabel = Instance.new("TextLabel")
+  statusLabel.BackgroundTransparency = 1
+  statusLabel.Size = UDim2.fromScale(1, 0.18)
+  statusLabel.Position = UDim2.fromScale(0, 0.28)
+  statusLabel.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+  statusLabel.Text = titleText or "Working..."
+  statusLabel.TextSize = 36
+  statusLabel.TextColor3 = Color3.new(1, 1, 1)
+  statusLabel.TextWrapped = true
+  statusLabel.Parent = bg
+
+  local detailLabel = Instance.new("TextLabel")
+  detailLabel.BackgroundTransparency = 1
+  detailLabel.Size = UDim2.fromScale(0.9, 0.08)
+  detailLabel.Position = UDim2.fromScale(0.05, 0.44)
+  detailLabel.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+  detailLabel.Text = ""
+  detailLabel.TextSize = 20
+  detailLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+  detailLabel.TextWrapped = true
+  detailLabel.Parent = bg
+
+  local etaLabel = Instance.new("TextLabel")
+  etaLabel.BackgroundTransparency = 1
+  etaLabel.Size = UDim2.fromScale(0.9, 0.07)
+  etaLabel.Position = UDim2.fromScale(0.05, 0.52)
+  etaLabel.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+  etaLabel.Text = ""
+  etaLabel.TextSize = 20
+  etaLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+  etaLabel.TextWrapped = true
+  etaLabel.Parent = bg
+
+  local statsLabel = Instance.new("TextLabel")
+  statsLabel.BackgroundTransparency = 1
+  statsLabel.Size = UDim2.fromScale(0.9, 0.07)
+  statsLabel.Position = UDim2.fromScale(0.05, 0.59)
+  statsLabel.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+  statsLabel.Text = ""
+  statsLabel.TextSize = 18
+  statsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+  statsLabel.TextWrapped = true
+  statsLabel.Parent = bg
+
+  local extraLabel = Instance.new("TextLabel")
+  extraLabel.BackgroundTransparency = 1
+  extraLabel.Size = UDim2.fromScale(0.9, 0.1)
+  extraLabel.Position = UDim2.fromScale(0.05, 0.66)
+  extraLabel.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+  extraLabel.Text = ""
+  extraLabel.TextSize = 16
+  extraLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+  extraLabel.TextWrapped = true
+  extraLabel.Parent = bg
+
+  return {
+    gui = gui,
+    statusLabel = statusLabel,
+    detailLabel = detailLabel,
+    etaLabel = etaLabel,
+    statsLabel = statsLabel,
+    extraLabel = extraLabel,
+    destroy = function()
+      if gui then
+        gui:Destroy()
+      end
+    end,
+  }
 end
 
 local function addId(ids, value)
@@ -370,21 +502,91 @@ local function replaceIdsInObject(obj, replacements, ordered, stats)
   replaceAttributes(obj, replacements, ordered, stats)
 end
 
-local function replaceOpenGame(text)
+local function collectValidObjects(progressCallback)
+  local objects = {}
+  for _, service in ipairs(game:GetChildren()) do
+    if not IGNORED_ROOTS[service.Name] then
+      table.insert(objects, service)
+      if progressCallback then progressCallback(#objects, service) end
+
+      local descendants = service:GetDescendants()
+      for i, obj in ipairs(descendants) do
+        table.insert(objects, obj)
+        if i % 10000 == 0 then
+          if progressCallback then progressCallback(#objects, obj) end
+          task.wait()
+        end
+      end
+    end
+  end
+  if progressCallback then progressCallback(#objects, objects[#objects]) end
+  return objects
+end
+
+local function replaceOpenGame(text, progressCallback)
   local replacements, ordered = parseReplacementMappings(text)
   if #ordered == 0 then
-    return false, "No replacement mappings found. Copy app output like \"123 = 456,\" or paste old -> new pairs."
+    return false, "No replacement mappings found from the app output."
   end
 
+  local startedAt = os.clock()
   local stats = {
+    phase = "Reading mappings",
     mappings = #ordered,
+    mappingPreview = summarizeMappings(ordered, 4),
+    totalObjects = 0,
+    scannedObjects = 0,
     objects = 0,
     replacements = 0,
     failed = 0,
+    elapsedSeconds = 0,
+    etaSeconds = nil,
+    currentObject = "",
   }
-  traverseValidDescendants(function(obj)
-    replaceIdsInObject(obj, replacements, ordered, stats)
+
+  local function publish(force)
+    stats.elapsedSeconds = os.clock() - startedAt
+    if stats.totalObjects > 0 and stats.scannedObjects > 0 and stats.scannedObjects < stats.totalObjects then
+      local averageTime = stats.elapsedSeconds / stats.scannedObjects
+      stats.etaSeconds = math.ceil((stats.totalObjects - stats.scannedObjects) * averageTime)
+    elseif stats.totalObjects > 0 and stats.scannedObjects >= stats.totalObjects then
+      stats.etaSeconds = 0
+    else
+      stats.etaSeconds = nil
+    end
+    if progressCallback then
+      progressCallback(stats, force == true)
+    end
+  end
+
+  publish(true)
+  stats.phase = "Preparing instances"
+  local objects = collectValidObjects(function(count, obj)
+    stats.totalObjects = count
+    stats.currentObject = shortenText(safeFullName(obj), 120)
+    publish(false)
   end)
+
+  stats.totalObjects = #objects
+  stats.scannedObjects = 0
+  stats.phase = "Replacing IDs"
+  stats.currentObject = ""
+  publish(true)
+
+  for i, obj in ipairs(objects) do
+    stats.scannedObjects = i
+    stats.currentObject = shortenText(safeFullName(obj), 120)
+    replaceIdsInObject(obj, replacements, ordered, stats)
+    if i % 250 == 0 or i == #objects then
+      publish(i == #objects)
+      task.wait()
+    end
+  end
+
+  stats.phase = "Finished"
+  stats.scannedObjects = stats.totalObjects
+  stats.currentObject = ""
+  publish(true)
 
   return true, stats
 end
@@ -480,6 +682,23 @@ local function creatorIdFromInfo(info)
   return tostring(studioUserId or 0)
 end
 
+local function shouldIgnoreCreator(creatorType, creatorId, ignoreOwnUserId)
+  if creatorType == "User" and tostring(creatorId) == "1" then
+    return true
+  end
+
+  if ignoreOwnUserId ~= true then
+    return false
+  end
+
+  local ownUserId = tostring(studioUserId or 0)
+  if ownUserId == "" or ownUserId == "0" then
+    return false
+  end
+
+  return creatorType == "User" and tostring(creatorId) == ownUserId
+end
+
 local function cleanText(value, fallback)
   local text = tostring(value or fallback or "Unknown")
   text = text:gsub("[\r\n\t]+", " ")
@@ -497,11 +716,14 @@ local function formatLine(asset)
     asset.creatorId)
 end
 
-local function resolveIds(kind, ids, progressCallback)
+local function resolveIds(kind, ids, progressCallback, options)
+  options = options or {}
   local expectedTypes = ASSET_TYPE_BY_KIND[kind]
+  local ignoreOwnUserId = options.ignoreOwnUserId == true
   local assets = {}
   local unresolved = 0
   local wrongType = 0
+  local skippedCreator = 0
   local completed = 0
 
   local queueIndex = 1
@@ -524,7 +746,9 @@ local function resolveIds(kind, ids, progressCallback)
       if info and expectedTypes[info.AssetTypeId] then
         local creatorType = creatorTypeFromInfo(info)
         local creatorId = creatorIdFromInfo(info)
-        if not (creatorType == "User" and tostring(creatorId) == "1") then
+        if shouldIgnoreCreator(creatorType, creatorId, ignoreOwnUserId) then
+          skippedCreator += 1
+        else
           table.insert(assets, {
             assetId = tostring(id),
             name = cleanText(info.Name, id),
@@ -554,7 +778,7 @@ local function resolveIds(kind, ids, progressCallback)
     task.wait(0.05)
   end
 
-  return assets, unresolved, wrongType
+  return assets, unresolved, wrongType, skippedCreator
 end
 
 local function requestJson(method, url, payload)
@@ -669,30 +893,98 @@ local function runReplacementWithText(text)
 
   replaceInProgress = true
   setButtonsEnabled(false)
-  print("[ISpooferMotion] Replacing IDs...")
-  print("[ISpooferMotion] Replacement started.")
+  print("[ISpooferMotion] Auto-Replace started.")
+
+  local gui = createDimmerProgressGui("ISpooferMotionReplacementProgress", "Auto-Replace starting...")
+  local lastUiUpdate = 0
+
+  local function updateGui(stats, force)
+    if not gui then return end
+    local now = os.clock()
+    if force ~= true and now - lastUiUpdate < 0.08 then
+      return
+    end
+    lastUiUpdate = now
+
+    local phase = tostring(stats.phase or "Replacing IDs")
+    local total = tonumber(stats.totalObjects or 0) or 0
+    local scanned = tonumber(stats.scannedObjects or 0) or 0
+    local elapsed = tonumber(stats.elapsedSeconds or 0) or 0
+    local eta = stats.etaSeconds
+
+    gui.statusLabel.Text = phase
+    if total > 0 then
+      gui.detailLabel.Text = string.format("Processed %d / %d instances", scanned, total)
+    else
+      gui.detailLabel.Text = string.format("Prepared %d instances", total)
+    end
+
+    local etaText = eta ~= nil and formatDuration(eta) or "calculating..."
+    gui.etaLabel.Text = "Elapsed: " .. formatDuration(elapsed) .. "  |  ETA: " .. etaText
+    gui.statsLabel.Text = string.format(
+      "Mappings: %d  |  Replacements: %d  |  Changed objects: %d  |  Failed writes: %d",
+      tonumber(stats.mappings or 0) or 0,
+      tonumber(stats.replacements or 0) or 0,
+      tonumber(stats.objects or 0) or 0,
+      tonumber(stats.failed or 0) or 0
+    )
+
+    local currentObject = tostring(stats.currentObject or "")
+    local mappingPreview = tostring(stats.mappingPreview or "")
+    if currentObject ~= "" then
+      gui.extraLabel.Text = "Current: " .. currentObject .. "\nMappings: " .. mappingPreview
+    else
+      gui.extraLabel.Text = "Mappings: " .. mappingPreview
+    end
+  end
 
   task.spawn(function()
     local ok, success, statsOrMessage = pcall(function()
-      return replaceOpenGame(text)
+      return replaceOpenGame(text, updateGui)
     end)
 
     if not ok then
       warn("[ISpooferMotion] Replacement failed: " .. tostring(success))
+      if gui then
+        gui.statusLabel.Text = "Auto-Replace failed"
+        gui.detailLabel.Text = shortenText(tostring(success), 160)
+        gui.etaLabel.Text = ""
+        gui.statsLabel.Text = ""
+        gui.extraLabel.Text = ""
+      end
+      task.wait(1.5)
     elseif not success then
       warn("[ISpooferMotion] " .. tostring(statsOrMessage))
+      if gui then
+        gui.statusLabel.Text = "Auto-Replace skipped"
+        gui.detailLabel.Text = tostring(statsOrMessage)
+        gui.etaLabel.Text = ""
+        gui.statsLabel.Text = ""
+        gui.extraLabel.Text = ""
+      end
+      task.wait(1.5)
     else
       local stats = statsOrMessage
+      updateGui(stats, true)
       local message = string.format(
-        "Replacement finished. %d replacement(s) across %d object(s). %d mapping(s), %d failed write(s).",
+        "Auto-Replace finished. %d replacement(s) across %d object(s). %d mapping(s), %d failed write(s).",
         stats.replacements,
         stats.objects,
         stats.mappings,
         stats.failed
       )
       print("[ISpooferMotion] " .. message)
+      if gui then
+        gui.statusLabel.Text = "Auto-Replace finished"
+        gui.detailLabel.Text = string.format("%d replacement(s) across %d object(s)", stats.replacements, stats.objects)
+        gui.etaLabel.Text = "Elapsed: " .. formatDuration(stats.elapsedSeconds or 0) .. "  |  ETA: 0s"
+      end
+      task.wait(1)
     end
 
+    if gui then
+      gui.destroy()
+    end
     replaceInProgress = false
     setButtonsEnabled(true)
   end)
@@ -806,8 +1098,9 @@ local function runScan(kind)
       print(string.format("[ISpooferMotion] Found %d possible %s ID(s) across %d instance(s). Resolving metadata...",
         #ids, label:lower(), scannedObjects))
 
+      local ignoreOwnUserId = completedScanCount > 0
       local resolveStart = os.clock()
-      local assets, unresolved, wrongType = resolveIds(kind, ids, function(current, total)
+      local assets, unresolved, wrongType, skippedCreator = resolveIds(kind, ids, function(current, total)
         if current % 10 == 0 or current == total then
           local elapsed = os.clock() - resolveStart
           local avgTime = elapsed / current
@@ -839,6 +1132,8 @@ local function runScan(kind)
         assetCount = #assets,
         unresolvedCount = unresolved,
         wrongTypeCount = wrongType,
+        skippedCreatorCount = skippedCreator,
+        ignoredOwnUserId = ignoreOwnUserId,
         assets = assets,
         lines = lines,
       }
@@ -852,6 +1147,7 @@ local function runScan(kind)
         warn("[ISpooferMotion] " .. label .. " scan finished, but sending to the app failed: " .. tostring(message))
         textLabel.Text = "Failed to send to app."
       end
+      completedScanCount += 1
       task.wait(0.5)
     end)
 
