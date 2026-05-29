@@ -29,7 +29,7 @@ soundsButton.ClickableWhenViewportHidden = true
 local scanInProgress = false
 local replaceInProgress = false
 local activeBaseUrl = BASE_URLS[1]
-local completedScanCount = 0
+local completedReplacementCount = 0
 local studioUserId = 0
 pcall(function()
   studioUserId = plugin:GetStudioUserId()
@@ -974,6 +974,9 @@ local function runReplacementWithText(text)
         stats.failed
       )
       print("[ISpooferMotion] " .. message)
+      if tonumber(stats.replacements or 0) > 0 then
+        completedReplacementCount += 1
+      end
       if gui then
         gui.statusLabel.Text = "Auto-Replace finished"
         gui.detailLabel.Text = string.format("%d replacement(s) across %d object(s)", stats.replacements, stats.objects)
@@ -1098,7 +1101,7 @@ local function runScan(kind)
       print(string.format("[ISpooferMotion] Found %d possible %s ID(s) across %d instance(s). Resolving metadata...",
         #ids, label:lower(), scannedObjects))
 
-      local ignoreOwnUserId = completedScanCount > 0
+      local ignoreOwnUserId = completedReplacementCount > 0
       local resolveStart = os.clock()
       local assets, unresolved, wrongType, skippedCreator = resolveIds(kind, ids, function(current, total)
         if current % 10 == 0 or current == total then
@@ -1147,7 +1150,6 @@ local function runScan(kind)
         warn("[ISpooferMotion] " .. label .. " scan finished, but sending to the app failed: " .. tostring(message))
         textLabel.Text = "Failed to send to app."
       end
-      completedScanCount += 1
       task.wait(0.5)
     end)
 
