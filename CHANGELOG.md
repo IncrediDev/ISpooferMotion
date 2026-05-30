@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.13-hotfix.1
+
+- Fixed Roblox "Too Many Requests" errors by properly throttling batch requests and adding exponential backoff.
+
 ## v1.3.13
 
 ### Race Condition Fix — "A newer version was created from a different request"

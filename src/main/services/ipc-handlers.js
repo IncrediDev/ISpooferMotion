@@ -14,6 +14,30 @@ const { saveSession, loadSession, clearSession } = require('./session');
 const { pauseSpoofer, resumeSpoofer, cancelSpoofer, resetRunControls, checkCancelled, checkPaused } = require('./ProcessManager');
 const { pushReplacement } = require('./localhost-plugin-server');
 
+// --- Global batch rate limiting for assetdelivery ---
+let batchRateLimitUntil = 0;
+
+function setBatchRateLimit(ms) {
+  batchRateLimitUntil = Math.max(batchRateLimitUntil, Date.now() + ms);
+}
+
+async function waitBatchRateLimit() {
+  const waitMs = batchRateLimitUntil - Date.now();
+  if (waitMs > 0) {
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
+function getBatchRetryAfterMs(response, attempt = 1) {
+  const retryAfterSeconds = parseInt(response?.headers?.get('retry-after') || '0', 10);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return retryAfterSeconds * 1000;
+  }
+  const baseMs = 15000; // ~15 seconds
+  const expMs = baseMs * Math.pow(2, attempt - 1);
+  return Math.floor(expMs + Math.random() * 2000); // add jitter
+}
+
 function normalizePayload(value) {
   return value && typeof value === 'object' ? value : {};
 }
@@ -1376,10 +1400,10 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
     creatorId: entry.creatorId,
   }));
   // Batch behavior controls (allow overrides via incoming data)
-  const BATCH_MAX_RETRIES = parseInt(data.batchRetries, 10) || 3;
+  const BATCH_MAX_RETRIES = parseInt(data.batchRetries, 10) || 5;
   const BATCH_RETRY_DELAY_MS = parseInt(data.batchRetryDelay, 10) || 2000;
   const BATCH_TIMEOUT_MS = parseInt(data.batchTimeoutMs, 10) || 15000; // 15s per batch
-  const chunkSize = parseInt(data.batchChunkSize, 10) || 20; // Reduce from 50 to 20 by default to mitigate 504s
+  const chunkSize = parseInt(data.batchChunkSize, 10) || 10; // Reduce from 50 to 10 by default to mitigate rate limits
 
   if (DEVELOPER_MODE) console.log(`(Dev) Fetching batch locations for ${batchItems.length} ${isSoundMode ? 'sounds' : 'animations'} with creator-specific placeIds`);
   for (let i = 0; i < batchItems.length; i += chunkSize) {
@@ -1423,6 +1447,8 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
           // Batch fetch with retry + timeout (retry on 429/5xx/504/timeout)
           let locations;
           for (let attempt = 1; attempt <= BATCH_MAX_RETRIES; attempt++) {
+            await waitBatchRateLimit();
+
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
             let resp;
@@ -1455,21 +1481,36 @@ async function handleSpooferAction(data, getMainWindowFn, sendTransferUpdate, se
             const isTimeout = caughtErr && (caughtErr.name === 'AbortError' || /aborted|timeout/i.test(caughtErr.message));
             const retryable = isTimeout || status === 429 || status === 502 || status === 503 || status === 504 || status === 500;
             const statusText = resp ? `${status}` : isTimeout ? 'timeout' : caughtErr ? caughtErr.message : 'unknown';
-            if (DEVELOPER_MODE) console.warn(`(Dev) Batch attempt ${attempt}/${BATCH_MAX_RETRIES} for ${creatorKey} @ place ${placeId} failed: ${statusText}${retryable && attempt < BATCH_MAX_RETRIES ? ' -> retrying' : ''}`);
+            
+            if (DEVELOPER_MODE) {
+              console.warn(`(Dev) Batch attempt ${attempt}/${BATCH_MAX_RETRIES} for ${creatorKey} @ place ${placeId} failed: ${statusText}${retryable && attempt < BATCH_MAX_RETRIES ? ' -> retrying' : ''}`);
+              console.warn(`(Dev) [Diagnostics] Creator Key: ${creatorKey}, Items: ${items.length}, Place ID: ${placeId}, Attempt: ${attempt}`);
+              if (resp) {
+                console.warn(`(Dev) [Diagnostics] Retry-After: ${resp.headers.get('retry-after') || 'none'}`);
+              }
+            }
 
             if (!retryable || attempt === BATCH_MAX_RETRIES) {
+              if (DEVELOPER_MODE && resp) {
+                try {
+                  const clonedResp = resp.clone();
+                  const text = await clonedResp.text();
+                  console.warn(`(Dev) [Diagnostics] Response Body: ${text.substring(0, 500)}`);
+                } catch (e) {}
+              }
               throw new Error(`Batch request failed for ${creatorKey}: ${statusText}`);
             }
 
-            // On 429, respect retry-after header; otherwise use configured delay
-            let delayMs = BATCH_RETRY_DELAY_MS;
+            // On 429, respect retry-after header and use exponential backoff; otherwise use configured delay
             if (status === 429 && resp) {
-              const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
-              if (retryAfter > 0) delayMs = Math.min(retryAfter * 1000, 120000);
-              else delayMs = Math.max(BATCH_RETRY_DELAY_MS, 15000); // default 15s on 429
+              const delayMs = getBatchRetryAfterMs(resp, attempt);
+              if (DEVELOPER_MODE) console.warn(`(Dev) Rate limited (429). Pausing batch globally for ${delayMs}ms`);
+              setBatchRateLimit(delayMs);
+              // We do NOT wait here; waitBatchRateLimit() is called at the start of the next attempt
+            } else {
+              const delayMs = BATCH_RETRY_DELAY_MS + Math.floor(Math.random() * 300);
+              await new Promise((r) => setTimeout(r, delayMs));
             }
-            const jitter = Math.floor(Math.random() * 300);
-            await new Promise((r) => setTimeout(r, delayMs + jitter));
           }
 
           if (!locations) throw new Error(`Batch request failed for ${creatorKey}: no response`);
