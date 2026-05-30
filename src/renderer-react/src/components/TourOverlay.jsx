@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-const FALLBACK_APP_VERSION = '1.3.12-hotfix.2';
+const FALLBACK_APP_VERSION = '1.3.13';
 const TOUR_VERSION_KEY = 'ism_seen_tour_version';
 
 const STEPS = [
@@ -142,7 +142,9 @@ export default function TourOverlay() {
     document.body.classList.remove('tour-active');
     try {
       window.localStorage?.setItem(TOUR_VERSION_KEY, appVersionRef.current);
-    } catch {}
+    } catch {
+      // Local storage can be unavailable in hardened or private contexts.
+    }
   };
 
   const renderStep = () => {
@@ -213,13 +215,17 @@ export default function TourOverlay() {
       let version = FALLBACK_APP_VERSION;
       try {
         version = (await window.electronAPI?.getAppVersion?.()) || FALLBACK_APP_VERSION;
-      } catch {}
+      } catch (error) {
+        console.warn('Failed to read app version for tour', error);
+      }
       if (cancelled) return;
       appVersionRef.current = String(version);
       let seenVersion = null;
       try {
         seenVersion = window.localStorage?.getItem(TOUR_VERSION_KEY) || null;
-      } catch {}
+      } catch (error) {
+        console.warn('Failed to read tour version from local storage', error);
+      }
       if (seenVersion !== appVersionRef.current) {
         setTimeout(() => {
           if (!cancelled) startTour();

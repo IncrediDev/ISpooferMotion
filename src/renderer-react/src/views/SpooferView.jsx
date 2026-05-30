@@ -52,6 +52,44 @@ export default function SpooferView({ isActive }) {
     }
   };
 
+  const normalizePastedLine = (line) =>
+    String(line || '')
+      .replace(/^\uFEFF/, '')
+      .replace(/[\u200B-\u200D\u2060]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .split('')
+      .filter((char) => {
+        const code = char.charCodeAt(0);
+        return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127);
+      })
+      .join('')
+      .trim();
+
+  const handleInputTextChange = (val) => {
+    setAnimationId(val);
+    const markerText = val
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = normalizePastedLine(line);
+        const stripped = trimmed
+          .replace(/--\[\[/g, '')
+          .replace(/--\]\]/g, '')
+          .replace(/\bTYPE\s*:\s*(SOUND|ANIMATION)\b/gi, '')
+          .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+          .replace(/[\s,\u00A0]+/g, '')
+          .replace(/[-_[\]{}()*=;:|/\\]+/g, '');
+        return stripped === '';
+      })
+      .join('\n');
+    const hasSoundMarker = /\bTYPE\s*:\s*SOUND\b/i.test(markerText);
+    const hasAnimationMarker = /\bTYPE\s*:\s*ANIMATION\b/i.test(markerText);
+    if (hasSoundMarker && !hasAnimationMarker) {
+      setSpoofSounds(true);
+    } else if (hasAnimationMarker && !hasSoundMarker) {
+      setSpoofSounds(false);
+    }
+  };
+
   useEffect(() => {
     let active = true;
     if (!spoofSounds) return;
@@ -69,8 +107,8 @@ export default function SpooferView({ isActive }) {
           return;
         }
 
-        let used = 0;
-        let capacity = 0;
+        let used;
+        let capacity;
         if (Array.isArray(result.quotas)) {
           const quota =
             result.quotas.find((q) => String(q?.duration).toLowerCase() === 'month') ||
@@ -158,9 +196,14 @@ export default function SpooferView({ isActive }) {
 
       phase.seen.set(id, { status });
 
-      if (status === 'error') {
-        // Removed bad status override
-      }
+    });
+
+    const cleanupLocalhostScan = window.electronAPI?.onLocalhostScanResults?.((scan) => {
+      if (!scan) return;
+      const importedText = String(scan.text || '').trim();
+      handleInputTextChange(importedText);
+      setSpoofSounds(scan.kind === 'sound');
+      setStatusText(`${scan.label || 'Plugin'} scan imported: ${scan.count || 0} ID${scan.count === 1 ? '' : 's'}.`);
     });
 
     return () => {
@@ -168,6 +211,7 @@ export default function SpooferView({ isActive }) {
       cleanupStatus && cleanupStatus();
       cleanupResult && cleanupResult();
       cleanupTransfer && cleanupTransfer();
+      cleanupLocalhostScan && cleanupLocalhostScan();
     };
   }, []);
 
@@ -247,7 +291,7 @@ export default function SpooferView({ isActive }) {
       downloadRetries: 2,
       downloadRetryDelayMs: 2000,
       downloadTimeoutMs: 15000,
-      concurrentUploads: profile.concurrent ?? false,
+      concurrentUploads: profile.concurrent ?? true,
       maxConcurrentUploads: profile.maxConcurrentUploads ?? 10,
       replaceExisting,
       renamePrefix: '', // Can be loaded from settings
@@ -300,38 +344,6 @@ export default function SpooferView({ isActive }) {
     }
   };
 
-  const normalizePastedLine = (line) => String(line || '')
-    .replace(/^\uFEFF/, '')
-    .replace(/[\u200B-\u200D\u2060]/g, '')
-    .replace(/\u00A0/g, ' ')
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
-    .trim();
-
-  const handleInputTextChange = (val) => {
-    setAnimationId(val);
-    const markerText = val
-      .split(/\r?\n/)
-      .filter((line) => {
-        const trimmed = normalizePastedLine(line);
-        const stripped = trimmed
-          .replace(/--\[\[/g, '')
-          .replace(/--\]\]/g, '')
-          .replace(/\bTYPE\s*:\s*(SOUND|ANIMATION)\b/gi, '')
-          .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
-          .replace(/[\s,\u00A0]+/g, '')
-          .replace(/[-_[\]{}()*=;:|/\\]+/g, '');
-        return stripped === '';
-      })
-      .join('\n');
-    const hasSoundMarker = /\bTYPE\s*:\s*SOUND\b/i.test(markerText);
-    const hasAnimationMarker = /\bTYPE\s*:\s*ANIMATION\b/i.test(markerText);
-    if (hasSoundMarker && !hasAnimationMarker) {
-      setSpoofSounds(true);
-    } else if (hasAnimationMarker && !hasSoundMarker) {
-      setSpoofSounds(false);
-    }
-  };
-
   const handleApiKeyBlur = async () => {
     const trimmed = openCloudApiKey.trim();
     setOpenCloudApiKey(trimmed);
@@ -356,19 +368,20 @@ export default function SpooferView({ isActive }) {
   };
 
   const handlePlaceSearch = async () => {
-    const creatorId = placeSearchInput.replace(/\D/g, '');
+    const rawInput = placeSearchInput.trim();
+    const lookupInput = placeCreatorType === 'place' ? rawInput : rawInput.replace(/\D/g, '');
     setPlaceSuggestions([]);
-    if (!creatorId) {
-      setPlaceSearchMessage('Enter a numeric User ID or Group ID.');
+    if (!lookupInput) {
+      setPlaceSearchMessage(placeCreatorType === 'place' ? 'Enter a Place ID or Roblox game URL.' : 'Enter a numeric User ID or Group ID.');
       return;
     }
 
-    setPlaceSearchInput(creatorId);
+    if (placeCreatorType !== 'place') setPlaceSearchInput(lookupInput);
     setPlaceSearchLoading(true);
     setPlaceSearchMessage('Searching places...');
     try {
       const result = await window.electronAPI?.searchPlaceIds?.({
-        input: creatorId,
+        input: lookupInput,
         creatorType: placeCreatorType,
         cookie: robloxCookie,
         autoDetect: autoDetectCookie,
@@ -376,8 +389,8 @@ export default function SpooferView({ isActive }) {
       });
       const places = result?.places || [];
       setPlaceSuggestions(places);
-      await updateProfileValue('placeSearchInput', creatorId);
-      const resolvedCreatorType = result?.creatorType === 'group' ? 'group' : 'user';
+      await updateProfileValue('placeSearchInput', lookupInput);
+      const resolvedCreatorType = result?.creatorType === 'group' ? 'group' : result?.creatorType === 'place' ? 'place' : 'user';
       if (resolvedCreatorType !== placeCreatorType) {
         setPlaceCreatorType(resolvedCreatorType);
       }
@@ -410,6 +423,43 @@ export default function SpooferView({ isActive }) {
     await updateProfileValue('overridePlaceId', place.placeId);
   };
 
+  const extractReplacementMappings = (text) => {
+    const mappings = [];
+    const seen = new Set();
+    const patterns = [
+      /(\d{5,})\s*=\s*(\d{5,})/g,
+      /Original ID:\s*(\d{5,}).*?(?:New Asset ID|Overwrote Asset ID):\s*(\d{5,})/gi,
+    ];
+
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(text))) {
+        if (match[1] === match[2]) continue;
+        const key = `${match[1]}:${match[2]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        mappings.push(`${match[1]} = ${match[2]},`);
+      }
+    }
+
+    return mappings.join('\n');
+  };
+
+  const copyReplacementMappings = async () => {
+    const mappings = extractReplacementMappings(outputData);
+    if (!mappings) {
+      setStatusText('No replacement mappings found in output.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(mappings);
+      setStatusText(`Copied ${mappings.split(/\r?\n/).length} replacement mapping(s).`);
+    } catch {
+      setStatusText('Could not copy replacement mappings.');
+    }
+  };
+
   return (
     <section
       className={`view spoofer-view ${isActive ? 'is-active' : ''}`}
@@ -422,13 +472,13 @@ export default function SpooferView({ isActive }) {
             <div className="asset-input-wrapper">
               <div className="asset-header">
                 <h3>Asset IDs</h3>
-                <span className="asset-hint">Supports [assetId], [name], and [userId]</span>
+                <span className="asset-hint">Supports [assetId], [name], and [User:123] / [Group:123]</span>
               </div>
               <textarea
                 className="ui-textarea code-input asset-textarea"
                 id="animationId"
                 name="animationId"
-                placeholder="[12345678] [ExampleAsset] [User12345]"
+                placeholder="[12345678] [ExampleAsset] [User:12345]"
                 value={animationId}
                 onChange={(e) => handleInputTextChange(e.target.value)}
               ></textarea>
@@ -722,7 +772,7 @@ export default function SpooferView({ isActive }) {
                         onClick={() => setPlaceTypeOpen((open) => !open)}
                       >
                         <span className="profile-trigger-label">
-                          {placeCreatorType === 'group' ? 'Group ID' : 'User ID'}
+                          {placeCreatorType === 'group' ? 'Group ID' : placeCreatorType === 'place' ? 'Place ID / URL' : 'User ID'}
                         </span>
                         <svg className="profile-trigger-arrow" viewBox="0 0 24 24" aria-hidden="true">
                           <path d="M7.4 9.2 12 13.8l4.6-4.6L18 10.6l-6 6-6-6 1.4-1.4Z" />
@@ -733,6 +783,7 @@ export default function SpooferView({ isActive }) {
                           {[
                             ['user', 'User ID'],
                             ['group', 'Group ID'],
+                            ['place', 'Place ID / URL'],
                           ].map(([value, label]) => (
                             <button
                               key={value}
@@ -756,14 +807,16 @@ export default function SpooferView({ isActive }) {
                       <input
                         className="ui-input"
                         type="text"
-                        inputMode="numeric"
+                        inputMode={placeCreatorType === 'place' ? 'text' : 'numeric'}
                         id="placeSearchInput"
                         name="placeSearchInput"
                         placeholder=" "
                         value={placeSearchInput}
-                        onChange={(e) => setPlaceSearchInput(e.target.value.replace(/\D/g, ''))}
+                        onChange={(e) =>
+                          setPlaceSearchInput(placeCreatorType === 'place' ? e.target.value : e.target.value.replace(/\D/g, ''))
+                        }
                       />
-                      <span>{placeCreatorType === 'group' ? 'Group ID for place search' : 'User ID for place search'}</span>
+                      <span>{placeCreatorType === 'group' ? 'Group ID for place search' : placeCreatorType === 'place' ? 'Place ID or Roblox game URL' : 'User ID for place search'}</span>
                     </label>
                     <button
                       className="ui-button place-search-button"
@@ -771,7 +824,7 @@ export default function SpooferView({ isActive }) {
                       disabled={placeSearchLoading}
                       onClick={handlePlaceSearch}
                     >
-                      {placeSearchLoading ? 'Searching...' : 'Find Places'}
+                      {placeSearchLoading ? 'Searching...' : placeCreatorType === 'place' ? 'Use Place' : 'Find Places'}
                     </button>
                       </div>
                       {placeSearchMessage && <div className="field-status">{placeSearchMessage}</div>}
@@ -822,34 +875,31 @@ export default function SpooferView({ isActive }) {
             ></textarea>
             <div className="output-actions">
               <button
-                className="ui-button"
-                id="copy-output-btn"
+                className="ui-button push-to-studio-btn"
+                id="push-to-studio-btn"
                 type="button"
+                disabled={!outputData || running}
                 onClick={async () => {
+                  if (!outputData) {
+                    setStatusText('No output to push — run a spoof first.');
+                    return;
+                  }
+                  setStatusText('Pushing to Studio...');
                   try {
-                    await navigator.clipboard.writeText(outputData);
-                    setStatusText('Output copied.');
-                  } catch {
-                    setStatusText('Nothing to copy.');
+                    const result = await window.electronAPI?.pushToStudio?.(outputData);
+                    if (result?.ok) {
+                      setStatusText(
+                        `Pushed ${result.count} replacement${result.count === 1 ? '' : 's'} to Studio — plugin will auto-replace shortly.`,
+                      );
+                    } else {
+                      setStatusText(`Push failed: ${result?.error || 'Unknown error'}`);
+                    }
+                  } catch (err) {
+                    setStatusText(`Push failed: ${err.message}`);
                   }
                 }}
               >
-                Copy output
-              </button>
-              <button
-                className="ui-button"
-                id="copy-retry-input-btn"
-                type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(lastInput || animationId);
-                    setStatusText('Retry input copied.');
-                  } catch {
-                    setStatusText('Nothing to copy.');
-                  }
-                }}
-              >
-                Copy retry input
+                Push to Studio
               </button>
             </div>
           </div>

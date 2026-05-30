@@ -58,10 +58,6 @@ fs.mkdirSync(outDir, { recursive: true });
 const pluginSource = fs
   .readFileSync(path.join(root, 'src', 'plugin', 'plugin.lua'), 'utf8')
   .replace(/__ISPOOFERMOTION_VERSION__/g, version);
-const unifiedUIFactorySource = fs.readFileSync(
-  path.join(root, 'src', 'plugin', 'modules', 'UnifiedUIFactory.lua'),
-  'utf8',
-);
 
 const mainScript = scriptItem(
   'Script',
@@ -69,12 +65,6 @@ const mainScript = scriptItem(
   'ISpooferMotion',
   pluginSource,
   false,
-);
-const assetsFolder = item(
-  'Folder',
-  'Assets',
-  [propString('Name', 'Assets')],
-  scriptItem('ModuleScript', 'UnifiedUIFactory', 'UnifiedUIFactory', unifiedUIFactorySource, false),
 );
 
 const xml = `<?xml version="1.0" encoding="utf-8"?>
@@ -86,7 +76,6 @@ const xml = `<?xml version="1.0" encoding="utf-8"?>
       ${propString('Name', 'ISpooferMotion')}
     </Properties>
     ${mainScript}
-    ${assetsFolder}
   </Item>
 </roblox>
 `;

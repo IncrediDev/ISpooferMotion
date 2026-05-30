@@ -18,7 +18,7 @@ export default function ProfilesView({ isActive }) {
     loadProfiles();
   }, []);
 
-  const loadProfiles = async () => {
+  async function loadProfiles() {
     try {
       const secrets = await window.electronAPI?.loadProfileSecrets?.();
       if (secrets) {
@@ -31,10 +31,12 @@ export default function ProfilesView({ isActive }) {
         setActiveId(newActiveId);
         applyProfileToState(newActiveId, secrets.profiles);
       }
-    } catch (e) {}
-  };
+    } catch (error) {
+      console.error('Failed to load profiles', error);
+    }
+  }
 
-  const applyProfileToState = (id, allProfiles) => {
+  function applyProfileToState(id, allProfiles) {
     const profile = allProfiles[id];
     if (profile) {
       setProfileName(profile.name || 'Unnamed Profile');
@@ -46,9 +48,9 @@ export default function ProfilesView({ isActive }) {
     } else {
       setRobloxData(null);
     }
-  };
+  }
 
-  const fetchRobloxData = async (cookieVal, groupIdVal, autoDetectVal) => {
+  async function fetchRobloxData(cookieVal, groupIdVal, autoDetectVal) {
     if (!cookieVal && !autoDetectVal) {
       setRobloxData(null);
       return;
@@ -65,7 +67,7 @@ export default function ProfilesView({ isActive }) {
       setRobloxData(null);
     }
     setIsLoading(false);
-  };
+  }
 
   const makeUniqueProfileName = (name, excludeId = null) => {
     const baseName = String(name || 'Unnamed Profile').trim() || 'Unnamed Profile';

@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.3.13-hotfix.1
+
+- Fixed Roblox "Too Many Requests" errors by properly throttling batch requests and adding exponential backoff.
+
+## v1.3.13
+
+### Race Condition Fix — "A newer version was created from a different request"
+- **Replace Existing uploads are now serialized (concurrency = 1).** Roblox was rejecting overlapping PATCH requests for the same asset when multiple workers raced to update it at the same time. Uploads with Replace Existing enabled now run one at a time to prevent this.
+- **Fixed the concurrent uploads toggle.** When "Concurrent uploads" was disabled, the concurrency limit was still defaulting to 10 instead of 1.
+- **Added a per-replacement async lock in the transfer layer.** Even if concurrency is accidentally raised in future code, only one PATCH operation per asset name/creator can be in-flight at a time.
+- **Duplicate final-name guard for Replace Existing.** If two input animations resolve to the same upload name after applying rename prefix/suffix/find-replace, the run now stops early with a clear error listing the conflicts instead of silently overwriting each other.
+- **Extracted rename logic into a shared `buildFinalUploadName()` helper** to eliminate duplicate code between `uploadOne` and `uploadFn`.
+
+### Auto-Replace in Studio
+- **New "Push to Studio" button** in the Output panel replaces the old Copy output / Copy retry input / Copy replacements buttons. After a spoof completes, clicking it queues the `oldId = newId` mappings directly to the Roblox Studio plugin.
+- **Plugin auto-applies replacements** — the Studio plugin now polls `/pending-replacement` every 3 seconds. When a batch is waiting it automatically runs the replacement across the entire open place, then acknowledges via `/mark-replacement-applied`.
+- **No widget interaction required** — polling starts immediately on plugin load, so the Replace widget does not need to be opened first.
+- **Green "Auto-Replace: Active" indicator** in the Replace widget shows the polling state, switching to "Auto-Replace: Applying..." while a replacement is running.
+- **App status bar confirms when Studio applied the replacements** (`Studio plugin applied the replacements ✓`).
+- Three new localhost server endpoints: `POST /push-replacements`, `GET /pending-replacement`, `POST /mark-replacement-applied`.
+
+### Activity / Jobs Panel
+- **Fixed job output not displaying** — job cards were reading `job.result.output` which does not exist on the stored record; now correctly reads `job.output`.
+- **Collapsed job cards now show a summary line** (Mode · Total · Downloaded · Uploaded) so you can see what a job did without expanding it.
+- **Added "↺ Retry Failed (N)" button** on job cards that had failures. Clicking it re-runs only the failed asset entries from that job with the same settings, without needing to copy-paste anything.
+
+- Replaced the old plugin UI with a localhost-based Roblox Studio plugin that exposes only Animations and Sounds toolbar scan buttons.
+- Added the desktop app localhost scan receiver, automatic Asset IDs input population, and scan-complete desktop notifications.
+- Updated app, renderer, plugin, and installer package metadata to 1.3.13.
+
 ## v1.3.12-hotfix.2
 
 - **Large plugin output fix:** Studio plugin scan results are split into numbered output scripts when they exceed Roblox's script source length limit.
